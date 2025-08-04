@@ -672,14 +672,14 @@ class AdvancedSubtitleGeneratorApp:
             if not audio_path:
                 messagebox.showerror("Error", "Audio file path is missing.")
                 return
-                
+
             output_video_path = os.path.splitext(self.output_file.get())[0] + "_video.mp4"
-            
+
             # Load audio and get duration
             self.status_var.set("Loading audio file...")
             audio = AudioFileClip(audio_path)
-            duration = audio.duration
-            
+            audio_duration = audio.duration
+
             # Determine video size based on format
             if video_format == "16:9 (1920x1080)":
                 size = (1920, 1080)
@@ -689,30 +689,110 @@ class AdvancedSubtitleGeneratorApp:
                 size = (1080, 1350)
             else:
                 size = (1920, 1080)
-            self.status_var.set(f"Creating video background ({video_format})...")
-            video = ColorClip(size=size, color=(255, 255, 255), duration=duration)
-            
-            # --- TYPEWRITER ANIMATION VIDEO CREATION ---
-            video_size = size
-            background_clip = ColorClip(size=video_size, color=(255, 255, 255)).set_duration(duration)
-            all_clips = [background_clip]
 
-            print("Creating typewriter animations for each subtitle line...")
-            for i, sub in enumerate(subtitles):
-                # Prepare subtitle data dict for the helper
-                sub_data = {
-                    'text': str(sub.text),
-                    'start': sub.start.ordinal / 1000.0,
-                    'end': sub.end.ordinal / 1000.0
-                }
-                print(f"Processing subtitle {i+1}/{len(subtitles)}: {sub_data['text']}")
-                typewriter_clip = create_word_typewriter_clip(sub_data, video_size, video_format=video_format)
-                if typewriter_clip:
-                    all_clips.append(typewriter_clip)
+            # --- Get scene and toggle ---
+            scene_path = None
+            use_scene = False
+            for pair in getattr(self, 'audio_script_pairs', []):
+                if pair.get('audio') == audio_path and pair.get('script') == self.script_file.get() and pair.get('output') == self.output_file.get():
+                    scene_path = pair.get('scene')
+                    use_scene = pair.get('use_scene', False)
+                    break
+            if not scene_path:
+                scene_path = None
 
-            print("All animations created. Combining clips into final video...")
-            final = CompositeVideoClip(all_clips)
-            final = final.set_audio(audio)
+            # --- CLASSIC FAST MODE (no scene) ---
+            if not use_scene or not scene_path:
+                print("Using classic fast mode: white background, typewriter subtitles, no scene.")
+                background_clip = ColorClip(size=size, color=(255, 255, 255)).set_duration(audio_duration)
+                all_clips = [background_clip]
+                for i, sub in enumerate(subtitles):
+                    sub_data = {
+                        'text': str(sub.text),
+                        'start': sub.start.ordinal / 1000.0,
+                        'end': sub.end.ordinal / 1000.0
+                    }
+                    typewriter_clip = create_word_typewriter_clip(sub_data, size, video_format=video_format)
+                    if typewriter_clip:
+                        all_clips.append(typewriter_clip)
+                final = CompositeVideoClip(all_clips).set_audio(audio).set_duration(audio_duration)
+            else:
+                # --- SCENE MODE: scene at start, typewriter subtitles on both scene and white background ---
+                print("Using scene mode: scene at start, typewriter subtitles on both scene and white background.")
+                scene_clip = None
+                scene_duration = 0
+                scene_loaded = False
+                try:
+                    from moviepy.editor import VideoFileClip
+                    scene_clip = VideoFileClip(scene_path)
+                    scene_clip = scene_clip.resize(newsize=size)
+                    scene_duration = scene_clip.duration
+                    scene_loaded = True
+                    print(f"✓ Scene loaded: {scene_path} ({scene_duration:.2f}s)")
+                except Exception as e:
+                    print(f"⚠ Could not load scene: {e}")
+                    messagebox.showwarning("Scene Error", f"Could not load scene video. Only white background will be used.\nError: {e}")
+                    scene_clip = None
+                    scene_duration = 0
+                    scene_loaded = False
+                white_duration = max(0, audio_duration - scene_duration)
+                white_clip = ColorClip(size=size, color=(255, 255, 255), duration=white_duration).set_start(scene_duration)
+                # Prepare subtitle clips for both scene and white background
+                subtitle_clips = []
+                for i, sub in enumerate(subtitles):
+                    sub_start = sub.start.ordinal / 1000.0
+                    sub_end = sub.end.ordinal / 1000.0
+                    # If subtitle ends before scene, skip
+                    if sub_end <= 0:
+                        continue
+                    # If subtitle starts before scene ends and ends after scene starts, split if needed
+                    if sub_start < scene_duration:
+                        # Clamp to scene duration
+                        scene_sub_start = max(sub_start, 0)
+                        scene_sub_end = min(sub_end, scene_duration)
+                        if scene_sub_end > scene_sub_start:
+                            sub_data_scene = {
+                                'text': str(sub.text),
+                                'start': scene_sub_start,
+                                'end': scene_sub_end
+                            }
+                            # On scene: white bg for subtitle
+                            typewriter_clip_scene = create_word_typewriter_clip(sub_data_scene, size, font="Arial-Bold", fontsize=70 if size[1] >= 1080 else 50, color='black', bg_color='white', video_format=video_format)
+                            if typewriter_clip_scene:
+                                subtitle_clips.append(typewriter_clip_scene.set_start(scene_sub_start))
+                        # If subtitle continues onto white background
+                        if sub_end > scene_duration:
+                            white_sub_start = scene_duration
+                            white_sub_end = sub_end
+                            sub_data_white = {
+                                'text': str(sub.text),
+                                'start': 0,
+                                'end': white_sub_end - white_sub_start
+                            }
+                            typewriter_clip_white = create_word_typewriter_clip(sub_data_white, size, font="Arial-Bold", fontsize=70 if size[1] >= 1080 else 50, color='black', bg_color=None, video_format=video_format)
+                            if typewriter_clip_white:
+                                subtitle_clips.append(typewriter_clip_white.set_start(white_sub_start))
+                    else:
+                        # Only on white background
+                        white_sub_start = sub_start
+                        white_sub_end = sub_end
+                        sub_data_white = {
+                            'text': str(sub.text),
+                            'start': white_sub_start - scene_duration,
+                            'end': white_sub_end - scene_duration
+                        }
+                        typewriter_clip_white = create_word_typewriter_clip(sub_data_white, size, font="Arial-Bold", fontsize=70 if size[1] >= 1080 else 50, color='black', bg_color=None, video_format=video_format)
+                        if typewriter_clip_white:
+                            subtitle_clips.append(typewriter_clip_white.set_start(white_sub_start))
+                # Compose scene and white background
+                clips_to_concat = []
+                if scene_loaded and scene_clip:
+                    scene_with_subs = CompositeVideoClip([scene_clip] + [c for c in subtitle_clips if c.start < scene_duration]).set_duration(scene_duration)
+                    clips_to_concat.append(scene_with_subs)
+                if white_duration > 0:
+                    white_with_subs = CompositeVideoClip([white_clip] + [c for c in subtitle_clips if c.start >= scene_duration]).set_duration(white_duration)
+                    clips_to_concat.append(white_with_subs)
+                final = concatenate_videoclips(clips_to_concat, method="compose").set_audio(audio).set_duration(audio_duration)
 
             # Export
             self.status_var.set("Exporting video...")
@@ -726,13 +806,13 @@ class AdvancedSubtitleGeneratorApp:
                 audio_codec='aac',
                 temp_audiofile='temp-audio.m4a',
                 remove_temp=True,
-                fps=24
+                fps=30
             )
-            
+
             self.status_var.set("Video created successfully!")
             if show_success_message:
                 messagebox.showinfo("Success", f"Video with integrated subtitles created successfully!\nSaved to: {output_video_path}")
-            
+
         except ImportError:
             messagebox.showerror("Error", "MoviePy is not installed. Please install it with: pip install moviepy")
         except Exception as e:
@@ -755,6 +835,13 @@ class AdvancedSubtitleGeneratorApp:
         )
         if not script_path:
             return
+        # Scene selection (optional)
+        scene_path = filedialog.askopenfilename(
+            title="Select Scene Video (Optional)",
+            filetypes=[("Video files", "*.mp4 *.mov *.avi *.mkv"), ("All files", "*.*")]
+        )
+        if not scene_path:
+            scene_path = None
         # Output file
         output_path = filedialog.asksaveasfilename(
             title="Save Subtitles As",
@@ -784,6 +871,11 @@ class AdvancedSubtitleGeneratorApp:
             cb.pack(anchor='w', padx=20)
             format_checks[key] = cb
 
+        # Scene toggle
+        use_scene_var = tk.BooleanVar(value=bool(scene_path))
+        scene_toggle = tk.Checkbutton(lang_window, text="Add scene at start (with typewriter subtitles on scene)", variable=use_scene_var)
+        scene_toggle.pack(anchor='w', padx=10, pady=(10, 0))
+
         def get_selected_formats():
             selected = [key for key, var in format_vars.items() if var.get()]
             return selected if selected else ["16:9 (1920x1080)"]
@@ -808,25 +900,29 @@ class AdvancedSubtitleGeneratorApp:
                     self.audio_script_pairs.append({
                         "audio": audio_path,
                         "script": script_path,
+                        "scene": scene_path,  # Store scene path
                         "output": output_path_with_format,
                         "language": self.LANGUAGES.get(language, "en"),
                         "video_format": video_format,
                         "generate_subtitles": True,
-                        "model_size": self.model_size.get()  # Add model size to batch processing
+                        "model_size": self.model_size.get(),
+                        "use_scene": use_scene_var.get()  # Store the toggle
                     })
-                    display_str = f"Audio: {os.path.basename(audio_path)} | Script: {os.path.basename(script_path)} | Output: {os.path.basename(output_path_with_format)} | Lang: {language} | Model: {self.model_size.get()} | Format: {video_format} (with subtitles)"
+                    display_str = f"Audio: {os.path.basename(audio_path)} | Script: {os.path.basename(script_path)} | Scene: {os.path.basename(scene_path) if scene_path else 'None'} | Output: {os.path.basename(output_path_with_format)} | Lang: {language} | Model: {self.model_size.get()} | Format: {video_format} (with subtitles) | Scene: {'Yes' if use_scene_var.get() else 'No'}"
                     first = False
                 else:
                     self.audio_script_pairs.append({
                         "audio": audio_path,
                         "script": script_path,
+                        "scene": scene_path,  # Store scene path
                         "output": output_path_with_format,
                         "language": self.LANGUAGES.get(language, "en"),
                         "video_format": video_format,
                         "generate_subtitles": False,
-                        "model_size": self.model_size.get()  # Add model size to batch processing
+                        "model_size": self.model_size.get(),
+                        "use_scene": use_scene_var.get()  # Store the toggle
                     })
-                    display_str = f"Audio: {os.path.basename(audio_path)} | Script: {os.path.basename(script_path)} | Output: {os.path.basename(output_path_with_format)} | Lang: {language} | Model: {self.model_size.get()} | Format: {video_format} (video only)"
+                    display_str = f"Audio: {os.path.basename(audio_path)} | Script: {os.path.basename(script_path)} | Scene: {os.path.basename(scene_path) if scene_path else 'None'} | Output: {os.path.basename(output_path_with_format)} | Lang: {language} | Model: {self.model_size.get()} | Format: {video_format} (video only) | Scene: {'Yes' if use_scene_var.get() else 'No'}"
                 self.pair_listbox.insert(tk.END, display_str)
             lang_window.destroy()
         tk.Button(lang_window, text="OK", command=set_lang).pack(pady=10)
@@ -953,7 +1049,7 @@ class AdvancedSubtitleGeneratorApp:
 
             # 4.5. Apply lead-in and lead-out for better readability
             audio_duration = self.get_audio_duration()  # Clamp subtitles to audio length
-            logical_subtitles = apply_subtitle_lead_in_out(logical_subtitles, lead_in=0.25, lead_out=0.25, audio_duration=audio_duration)
+            logical_subtitles = apply_subtitle_lead_in_out(logical_subtitles, lead_in=0.4, lead_out=0.4, audio_duration=audio_duration)
 
             # 4.6. Filter out subtitles that are empty or only punctuation
             import string
@@ -961,6 +1057,21 @@ class AdvancedSubtitleGeneratorApp:
                 text = sub['text'].strip()
                 return text and any(c.isalnum() for c in text)
             logical_subtitles = [sub for sub in logical_subtitles if is_meaningful_sub(sub)]
+
+            # 4.7. Merge one-word subtitles with the previous subtitle
+            def merge_one_word_subs(subs):
+                if not subs:
+                    return subs
+                merged = [subs[0]]
+                for sub in subs[1:]:
+                    if len(sub['text'].strip().split()) == 1 and len(merged[-1]['text'].strip().split()) > 0:
+                        # Merge with previous
+                        merged[-1]['text'] = merged[-1]['text'].rstrip() + ' ' + sub['text'].lstrip()
+                        merged[-1]['end'] = sub['end']  # Extend end time
+                    else:
+                        merged.append(sub)
+                return merged
+            logical_subtitles = merge_one_word_subs(logical_subtitles)
 
             # 5. Convert to pysrt.SubRipItem objects
             subtitles = []
@@ -1199,15 +1310,16 @@ def wrap_text_for_format(text, video_format, max_chars_per_line=None):
 # --- Typewriter animation helper ---
 # --- Always center subtitles in create_word_typewriter_clip ---
 def create_word_typewriter_clip(subtitle_data, video_size, font="Arial-Bold", fontsize=70, color='black', bg_color='transparent', video_format="16:9 (1920x1080)"):
-    """Creates a word-by-word typewriter effect clip for a single subtitle line with text wrapping for vertical formats."""
     full_text = subtitle_data['text']
     line_duration = subtitle_data['end'] - subtitle_data['start']
-    if not full_text or line_duration <= 0:
+    # Defensive checks
+    if not full_text or not isinstance(full_text, str) or line_duration <= 0:
         return None
-    
+    # Ensure bg_color is a valid string or None
+    if bg_color not in ['white', None, 'transparent']:
+        bg_color = None
     # Wrap text for vertical formats
     wrapped_text = wrap_text_for_format(full_text, video_format)
-    
     # Adjust font size for different formats
     if "9:16" in video_format or "1080x1920" in video_format:
         fontsize = min(fontsize, 50)  # Smaller font for vertical
@@ -1215,30 +1327,28 @@ def create_word_typewriter_clip(subtitle_data, video_size, font="Arial-Bold", fo
         fontsize = min(fontsize, 60)  # Medium font for square-ish
     elif "16:9" in video_format or "1920x1080" in video_format:
         fontsize = min(fontsize, 70)  # Standard font for horizontal, but still apply wrapping
-    
     words = full_text.split()
     if not words:
         return None
-    
     word_clips = []
     duration_per_word = line_duration / len(words)
-    
     for i in range(len(words)):
         displayed_words = words[:i+1]
-        # Wrap the displayed text as we build it
         displayed_text = wrap_text_for_format(" ".join(displayed_words), video_format)
-        
-        word_clip = TextClip(
-            displayed_text,
-            fontsize=fontsize, font=font, color=color, bg_color=bg_color,
-            method='label' # Use 'label' for tight-fitting text clips
-        ).set_duration(duration_per_word)
-        word_clips.append(word_clip)
-    
+        if not displayed_text or not isinstance(displayed_text, str):
+            continue
+        try:
+            word_clip = TextClip(
+                displayed_text,
+                fontsize=fontsize, font=font, color=color, bg_color=bg_color,
+                method='label' # Use 'label' for tight-fitting text clips
+            ).set_duration(duration_per_word)
+            word_clips.append(word_clip)
+        except Exception as e:
+            print(f"Warning: Could not create TextClip for text '{displayed_text}': {e}")
+            continue
     if not word_clips:
         return None
-    
-    # Concatenate the clips, then center the whole animation
     typewriter_sequence = concatenate_videoclips(word_clips)
     return typewriter_sequence.set_position('center').set_start(subtitle_data['start'])
 
