@@ -118,18 +118,65 @@ except ImportError:
 # Note: The bundled/local/system path is already configured above
 # This ensures we use the correct ImageMagick installation
 
-# Example correction dictionary
-# KEY (wrong text) : VALUE (correct text)
+# Enhanced correction dictionaries for better name and proper noun handling
 CORRECTIONS = {
+    # Common name corrections
     "Doctor Mitja": "Dr. Mitja",
     "machtig": "Machtig",
-    "MOVE-UK-SCR30-2": "Move UK"  # Example of correcting other jargon
+    "MOVE-UK-SCR30-2": "Move UK",
+    
+    # Common transcription errors for names
+    "john": "John",
+    "mary": "Mary",
+    "michael": "Michael",
+    "sarah": "Sarah",
+    "david": "David",
+    "emma": "Emma",
+    "james": "James",
+    "lisa": "Lisa",
+    "robert": "Robert",
+    "anna": "Anna",
+    
+    # Common abbreviations
+    "dr": "Dr.",
+    "mr": "Mr.",
+    "mrs": "Mrs.",
+    "ms": "Ms.",
+    "prof": "Prof.",
+    "professor": "Professor",
+    
+    # Common company/product names
+    "microsoft": "Microsoft",
+    "apple": "Apple",
+    "google": "Google",
+    "amazon": "Amazon",
+    "facebook": "Facebook",
+    "netflix": "Netflix",
+    
+    # Technical terms
+    "javascript": "JavaScript",
+    "python": "Python",
+    "html": "HTML",
+    "css": "CSS",
+    "api": "API",
+    "url": "URL",
+    "http": "HTTP",
+    "https": "HTTPS"
 }
 
-# Example phrase-level corrections (lowercase keys)
+# Enhanced phrase-level corrections (lowercase keys)
 PHRASE_CORRECTIONS = {
     "doctor mitja machtig": "Dr. Mitja Machtig",
-    "move uk scr thirty": "Move UK SCR30"
+    "move uk scr thirty": "Move UK SCR30",
+    "mister smith": "Mr. Smith",
+    "misses jones": "Mrs. Jones",
+    "professor brown": "Prof. Brown",
+    "united states": "United States",
+    "new york": "New York",
+    "los angeles": "Los Angeles",
+    "san francisco": "San Francisco",
+    "united kingdom": "United Kingdom",
+    "united nations": "United Nations"
 }
 
 class AdvancedSubtitleGeneratorApp:
@@ -185,6 +232,9 @@ class AdvancedSubtitleGeneratorApp:
         self.subtitles_only = tk.BooleanVar(value=False)
         
         self.setup_ui()
+        
+        # Load any saved custom corrections
+        self.load_corrections_from_file()
         
     def setup_ui(self):
         # Restore original simple gray UI
@@ -299,9 +349,49 @@ class AdvancedSubtitleGeneratorApp:
         grouping_label = ttk.Label(model_frame, text=grouping_help, foreground='purple', wraplength=600, justify='left')
         grouping_label.grid(row=8, column=0, columnspan=2, sticky="w", pady=(5, 0))
         
+        # Custom name corrections section
+        corrections_frame = ttk.LabelFrame(main_frame, text="Custom Name Corrections", padding=10)
+        corrections_frame.grid(row=9, column=0, columnspan=3, sticky="ew", pady=(20, 0))
+        corrections_frame.columnconfigure(1, weight=1)
+        
+        ttk.Label(corrections_frame, text="Add custom corrections for names, proper nouns, or technical terms:").grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 10))
+        
+        # Wrong text entry
+        ttk.Label(corrections_frame, text="Wrong/Transcribed:").grid(row=1, column=0, sticky="w", padx=(0, 10))
+        self.wrong_text_var = tk.StringVar()
+        wrong_entry = ttk.Entry(corrections_frame, textvariable=self.wrong_text_var, width=30)
+        wrong_entry.grid(row=1, column=1, sticky="ew", padx=(0, 10))
+        
+        # Correct text entry
+        ttk.Label(corrections_frame, text="Correct:").grid(row=2, column=0, sticky="w", padx=(0, 10))
+        self.correct_text_var = tk.StringVar()
+        correct_entry = ttk.Entry(corrections_frame, textvariable=self.correct_text_var, width=30)
+        correct_entry.grid(row=2, column=1, sticky="ew", padx=(0, 10))
+        
+        # Add correction button
+        add_correction_btn = ttk.Button(corrections_frame, text="Add Correction", command=self.add_custom_correction)
+        add_correction_btn.grid(row=2, column=2, padx=(10, 0))
+        
+        # Corrections listbox
+        ttk.Label(corrections_frame, text="Current Corrections:").grid(row=3, column=0, sticky="w", pady=(15, 5))
+        self.corrections_listbox = tk.Listbox(corrections_frame, height=4, width=60)
+        self.corrections_listbox.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(0, 10))
+        
+        # Remove correction button
+        remove_correction_btn = ttk.Button(corrections_frame, text="Remove Selected", command=self.remove_custom_correction)
+        remove_correction_btn.grid(row=4, column=2, padx=(10, 0))
+        
+        # Load existing corrections into listbox
+        self.load_corrections_to_ui()
+        
+        # Help text for corrections
+        corrections_help = "Add custom corrections for names, proper nouns, or technical terms that Whisper often gets wrong. Examples: 'john' -> 'John', 'microsoft' -> 'Microsoft', 'dr smith' -> 'Dr. Smith'"
+        corrections_help_label = ttk.Label(corrections_frame, text=corrections_help, foreground='blue', wraplength=600, justify='left')
+        corrections_help_label.grid(row=5, column=0, columnspan=3, sticky="w", pady=(10, 0))
+        
         # Subtitles only checkbox
         subtitles_only_cb = ttk.Checkbutton(main_frame, text="Subtitles only (do not create video)", variable=self.subtitles_only)
-        subtitles_only_cb.grid(row=9, column=0, columnspan=3, pady=(5, 0), sticky=tk.W)
+        subtitles_only_cb.grid(row=10, column=0, columnspan=3, pady=(5, 0), sticky=tk.W)
         
     def browse_script(self):
         filename = filedialog.askopenfilename(
@@ -433,8 +523,31 @@ class AdvancedSubtitleGeneratorApp:
             # 2. Group words by punctuation
             logical_subtitles = self.group_words_by_punctuation(word_segments, max_words=self.max_words_per_subtitle.get())
 
-            # 2.5. ✍️ NEW: Correct known names and errors
-            logical_subtitles = correct_known_errors(logical_subtitles, CORRECTIONS)
+            # 2.5. ✍️ ENHANCED: Correct known names and errors with script-based corrections
+            if self.script_file.get() and os.path.exists(self.script_file.get()):
+                try:
+                    # Load script for name correction
+                    with open(self.script_file.get(), 'r', encoding='utf-8') as f:
+                        script_text = f.read()
+                    
+                    # Create transcription text for comparison
+                    transcription_text = ' '.join([seg['word'] for seg in word_segments])
+                    
+                    # Generate script-based corrections
+                    script_corrections = create_script_based_corrections(script_text, transcription_text)
+                    
+                    # Apply enhanced corrections
+                    logical_subtitles = enhanced_correct_known_errors(logical_subtitles, CORRECTIONS, script_corrections)
+                    
+                    if script_corrections:
+                        print(f"Applied {len(script_corrections)} script-based corrections for names and proper nouns")
+                except Exception as e:
+                    print(f"Warning: Could not apply script-based corrections: {e}")
+                    # Fallback to regular corrections
+                    logical_subtitles = enhanced_correct_known_errors(logical_subtitles, CORRECTIONS)
+            else:
+                # No script available, use regular corrections
+                logical_subtitles = enhanced_correct_known_errors(logical_subtitles, CORRECTIONS)
 
             # 3. Adjust overlaps
             logical_subtitles = adjust_subtitle_overlaps(logical_subtitles, min_gap_seconds=0.1)
@@ -516,7 +629,10 @@ class AdvancedSubtitleGeneratorApp:
         except Exception as e:
             self.status_var.set(f"Error: {str(e)}")
             messagebox.showerror("Error", f"An error occurred: {str(e)}")
-            
+            print(f"Full error details: {e}")
+            import traceback
+            traceback.print_exc()
+
     def load_script(self):
         """Load, clean, and parse the script into appropriately sized subtitle lines."""
         with open(self.script_file.get(), 'r', encoding='utf-8') as f:
@@ -1351,8 +1467,31 @@ class AdvancedSubtitleGeneratorApp:
             # 2. Group words by punctuation
             logical_subtitles = self.group_words_by_punctuation(word_segments, max_words=max_words_per_subtitle)
 
-            # 2.5. ✍️ NEW: Correct known names and errors
-            logical_subtitles = correct_known_errors(logical_subtitles, CORRECTIONS)
+            # 2.5. ✍️ ENHANCED: Correct known names and errors with script-based corrections
+            if self.script_file.get() and os.path.exists(self.script_file.get()):
+                try:
+                    # Load script for name correction
+                    with open(self.script_file.get(), 'r', encoding='utf-8') as f:
+                        script_text = f.read()
+                    
+                    # Create transcription text for comparison
+                    transcription_text = ' '.join([seg['word'] for seg in word_segments])
+                    
+                    # Generate script-based corrections
+                    script_corrections = create_script_based_corrections(script_text, transcription_text)
+                    
+                    # Apply enhanced corrections
+                    logical_subtitles = enhanced_correct_known_errors(logical_subtitles, CORRECTIONS, script_corrections)
+                    
+                    if script_corrections:
+                        print(f"Applied {len(script_corrections)} script-based corrections for names and proper nouns")
+                except Exception as e:
+                    print(f"Warning: Could not apply script-based corrections: {e}")
+                    # Fallback to regular corrections
+                    logical_subtitles = enhanced_correct_known_errors(logical_subtitles, CORRECTIONS)
+            else:
+                # No script available, use regular corrections
+                logical_subtitles = enhanced_correct_known_errors(logical_subtitles, CORRECTIONS)
 
             # 3. Adjust overlaps
             logical_subtitles = adjust_subtitle_overlaps(logical_subtitles, min_gap_seconds=0.1)
@@ -1437,6 +1576,82 @@ class AdvancedSubtitleGeneratorApp:
             self.status_var.set(f"Error: {str(e)}")
             print(f"Error in batch video creation: {e}")
             return srt_path_for_batch
+
+    def load_corrections_to_ui(self):
+        """Load existing corrections into the UI listbox."""
+        self.corrections_listbox.delete(0, tk.END)
+        for wrong, correct in CORRECTIONS.items():
+            self.corrections_listbox.insert(tk.END, f"'{wrong}' → '{correct}'")
+    
+    def add_custom_correction(self):
+        """Add a custom correction to the corrections dictionary."""
+        wrong_text = self.wrong_text_var.get().strip()
+        correct_text = self.correct_text_var.get().strip()
+        
+        if not wrong_text or not correct_text:
+            messagebox.showwarning("Warning", "Please enter both wrong and correct text.")
+            return
+        
+        if wrong_text == correct_text:
+            messagebox.showwarning("Warning", "Wrong and correct text cannot be the same.")
+            return
+        
+        # Add to global corrections
+        CORRECTIONS[wrong_text] = correct_text
+        
+        # Update UI
+        self.load_corrections_to_ui()
+        
+        # Clear input fields
+        self.wrong_text_var.set("")
+        self.correct_text_var.set("")
+        
+        messagebox.showinfo("Success", f"Added correction: '{wrong_text}' → '{correct_text}'")
+    
+    def remove_custom_correction(self):
+        """Remove the selected correction from the corrections dictionary."""
+        selection = self.corrections_listbox.curselection()
+        if not selection:
+            messagebox.showwarning("Warning", "Please select a correction to remove.")
+            return
+        
+        # Get the selected item text
+        selected_text = self.corrections_listbox.get(selection[0])
+        
+        # Parse the correction from the display text
+        try:
+            wrong_text = selected_text.split("' → '")[0].strip("'")
+            if wrong_text in CORRECTIONS:
+                del CORRECTIONS[wrong_text]
+                self.load_corrections_to_ui()
+                messagebox.showinfo("Success", f"Removed correction: '{wrong_text}'")
+            else:
+                messagebox.showerror("Error", "Could not find the selected correction.")
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not parse the selected correction: {e}")
+    
+    def save_corrections_to_file(self):
+        """Save current corrections to a file for persistence."""
+        try:
+            with open("custom_corrections.txt", "w", encoding="utf-8") as f:
+                for wrong, correct in CORRECTIONS.items():
+                    f.write(f"{wrong}\t{correct}\n")
+            print("Custom corrections saved to custom_corrections.txt")
+        except Exception as e:
+            print(f"Warning: Could not save custom corrections: {e}")
+    
+    def load_corrections_from_file(self):
+        """Load corrections from a file."""
+        try:
+            if os.path.exists("custom_corrections.txt"):
+                with open("custom_corrections.txt", "r", encoding="utf-8") as f:
+                    for line in f:
+                        if line.strip() and '\t' in line:
+                            wrong, correct = line.strip().split('\t', 1)
+                            CORRECTIONS[wrong] = correct
+                print(f"Loaded {len(CORRECTIONS)} custom corrections from file")
+        except Exception as e:
+            print(f"Warning: Could not load custom corrections: {e}")
 
 def adjust_subtitle_overlaps(subtitle_lines, min_gap_seconds=0.1):
     """
@@ -1879,6 +2094,130 @@ def get_animation_style_options():
     }
 
 # NOTE: Please copy magick.exe from your ImageMagick install directory to C:\ImageMagick if not already done.
+
+def extract_names_from_script(script_text):
+    """
+    Extracts potential names and proper nouns from the script text.
+    This helps improve transcription accuracy for names.
+    
+    Args:
+        script_text: The script text to analyze
+        
+    Returns:
+        dict: Dictionary of potential names and their variations
+    """
+    import re
+    
+    # Common name patterns
+    name_patterns = [
+        r'\b[A-Z][a-z]+ [A-Z][a-z]+\b',  # First Last
+        r'\b[A-Z][a-z]+ [A-Z][a-z]+ [A-Z][a-z]+\b',  # First Middle Last
+        r'\b[A-Z][a-z]+\. [A-Z][a-z]+\b',  # Dr. Last, Mr. Last, etc.
+        r'\b[A-Z][a-z]+ [A-Z][a-z]+\.\b',  # First Dr., First Mr., etc.
+        r'\b[A-Z][a-z]+ [A-Z][a-z]+ [A-Z][a-z]+\.\b',  # First Middle Dr., etc.
+    ]
+    
+    extracted_names = {}
+    
+    for pattern in name_patterns:
+        matches = re.findall(pattern, script_text)
+        for match in matches:
+            # Create variations for better matching
+            name_lower = match.lower()
+            name_title_case = match.title()
+            name_upper = match.upper()
+            
+            # Store variations
+            extracted_names[name_lower] = match  # Original case
+            extracted_names[name_title_case.lower()] = match  # Title case
+            extracted_names[name_upper.lower()] = match  # Upper case
+            
+            # Also add without punctuation for better matching
+            clean_name = re.sub(r'[.,!?]', '', match)
+            if clean_name != match:
+                extracted_names[clean_name.lower()] = clean_name
+    
+    return extracted_names
+
+def create_script_based_corrections(script_text, transcription_text):
+    """
+    Creates corrections based on comparing the script with the transcription.
+    This helps fix names and proper nouns that were transcribed incorrectly.
+    
+    Args:
+        script_text: The original script text
+        transcription_text: The transcribed text from Whisper
+        
+    Returns:
+        dict: Dictionary of corrections to apply
+    """
+    import re
+    from difflib import SequenceMatcher
+    
+    # Extract names from script
+    script_names = extract_names_from_script(script_text)
+    
+    # Split both texts into words for comparison
+    script_words = re.findall(r'\b\w+\b', script_text.lower())
+    trans_words = re.findall(r'\b\w+\b', transcription_text.lower())
+    
+    corrections = {}
+    
+    # Look for potential name matches
+    for script_name_lower, script_name_original in script_names.items():
+        script_name_words = script_name_lower.split()
+        
+        # Check if this name appears in transcription
+        for i in range(len(trans_words) - len(script_name_words) + 1):
+            trans_phrase = ' '.join(trans_words[i:i + len(script_name_words)])
+            
+            # Use fuzzy matching for better name detection
+            similarity = SequenceMatcher(None, script_name_lower, trans_phrase).ratio()
+            
+            if similarity > 0.7:  # 70% similarity threshold
+                # Found a potential match
+                corrections[trans_phrase] = script_name_original
+                print(f"Script-based correction: '{trans_phrase}' -> '{script_name_original}' (similarity: {similarity:.2f})")
+    
+    return corrections
+
+def enhanced_correct_known_errors(subtitle_lines, corrections, script_corrections=None):
+    """
+    Enhanced version of correct_known_errors that also applies script-based corrections.
+    
+    Args:
+        subtitle_lines: The list of subtitle dictionaries.
+        corrections: A dictionary where key is the wrong text and value is the correct text.
+        script_corrections: Additional corrections from script analysis.
+    """
+    if script_corrections:
+        # Merge script corrections with regular corrections
+        all_corrections = {**corrections, **script_corrections}
+    else:
+        all_corrections = corrections
+    
+    for line in subtitle_lines:
+        original_text = line['text']
+        corrected_text = original_text
+        
+        # Apply corrections in order of length (longest first) to avoid partial replacements
+        sorted_corrections = sorted(all_corrections.items(), key=lambda x: len(x[0]), reverse=True)
+        
+        for wrong, correct in sorted_corrections:
+            # Use case-insensitive replacement
+            if wrong.lower() in corrected_text.lower():
+                # Preserve original case where possible
+                corrected_text = corrected_text.replace(wrong, correct)
+                corrected_text = corrected_text.replace(wrong.lower(), correct)
+                corrected_text = corrected_text.replace(wrong.title(), correct)
+                corrected_text = corrected_text.replace(wrong.upper(), correct)
+        
+        # Update the subtitle text
+        if corrected_text != original_text:
+            print(f"Corrected: '{original_text}' -> '{corrected_text}'")
+            line['text'] = corrected_text
+    
+    return subtitle_lines
 
 def main():
     root = tk.Tk()
