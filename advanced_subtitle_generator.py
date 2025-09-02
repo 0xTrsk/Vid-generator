@@ -260,13 +260,20 @@ class AdvancedSubtitleGeneratorApp:
                                       textvariable=self.word_lead_in, width=10)
         lead_in_spinbox.grid(row=2, column=1, sticky=tk.W, pady=(10, 0))
         
+        # Max words per subtitle control
+        ttk.Label(model_frame, text="Max Words/Subtitle:").grid(row=3, column=0, sticky=tk.W, padx=(0, 10), pady=(10, 0))
+        self.max_words_per_subtitle = tk.IntVar(value=8)  # 8 words default
+        max_words_spinbox = ttk.Spinbox(model_frame, from_=6, to=12, increment=1, 
+                                        textvariable=self.max_words_per_subtitle, width=10)
+        max_words_spinbox.grid(row=3, column=1, sticky=tk.W, pady=(10, 0))
+        
         # Model info
         model_info = "tiny (39MB) < base (74MB) < small (244MB) < medium (769MB) < large (1550MB) < large-v2 (1550MB) < large-v3 (1550MB)"
-        ttk.Label(model_frame, text=model_info, foreground='gray', wraplength=600).grid(row=3, column=0, columnspan=2, sticky=tk.W, pady=(5, 0))
+        ttk.Label(model_frame, text=model_info, foreground='gray', wraplength=600).grid(row=4, column=0, columnspan=2, sticky=tk.W, pady=(5, 0))
         
         # Animation style info
         animation_info = "Choose from: typewriter, fade_in, slide_up, bounce, glitch, wave, zoom_in, typewriter_enhanced"
-        ttk.Label(model_frame, text=animation_info, foreground='gray', wraplength=600).grid(row=4, column=0, columnspan=2, sticky=tk.W, pady=(5, 0))
+        ttk.Label(model_frame, text=animation_info, foreground='gray', wraplength=600).grid(row=5, column=0, columnspan=2, sticky=tk.W, pady=(5, 0))
         
         # Detailed animation help
         animation_help = """Animation Styles:
@@ -280,16 +287,21 @@ class AdvancedSubtitleGeneratorApp:
 • typewriter_enhanced: Typewriter with blinking cursor"""
         
         help_label = ttk.Label(model_frame, text=animation_help, foreground='blue', wraplength=600, justify='left')
-        help_label.grid(row=5, column=0, columnspan=2, sticky="w", pady=(5, 0))
+        help_label.grid(row=6, column=0, columnspan=2, sticky="w", pady=(5, 0))
         
         # Timing help
         timing_help = "Word Lead-in: How many milliseconds before each word is spoken that it appears on screen (0-500ms)"
         timing_label = ttk.Label(model_frame, text=timing_help, foreground='green', wraplength=600, justify='left')
-        timing_label.grid(row=6, column=0, columnspan=2, sticky="w", pady=(5, 0))
+        timing_label.grid(row=7, column=0, columnspan=2, sticky="w", pady=(5, 0))
+        
+        # Subtitle grouping help
+        grouping_help = "Max Words/Subtitle: Controls how many words appear per subtitle line (6-12, default 8 for 2-line display)"
+        grouping_label = ttk.Label(model_frame, text=grouping_help, foreground='purple', wraplength=600, justify='left')
+        grouping_label.grid(row=8, column=0, columnspan=2, sticky="w", pady=(5, 0))
         
         # Subtitles only checkbox
         subtitles_only_cb = ttk.Checkbutton(main_frame, text="Subtitles only (do not create video)", variable=self.subtitles_only)
-        subtitles_only_cb.grid(row=8, column=0, columnspan=3, pady=(5, 0), sticky=tk.W)
+        subtitles_only_cb.grid(row=9, column=0, columnspan=3, pady=(5, 0), sticky=tk.W)
         
     def browse_script(self):
         filename = filedialog.askopenfilename(
@@ -419,7 +431,7 @@ class AdvancedSubtitleGeneratorApp:
             word_segments = force_correct_phrases(word_segments, PHRASE_CORRECTIONS)
 
             # 2. Group words by punctuation
-            logical_subtitles = self.group_words_by_punctuation(word_segments)
+            logical_subtitles = self.group_words_by_punctuation(word_segments, max_words=self.max_words_per_subtitle.get())
 
             # 2.5. ✍️ NEW: Correct known names and errors
             logical_subtitles = correct_known_errors(logical_subtitles, CORRECTIONS)
@@ -666,78 +678,118 @@ class AdvancedSubtitleGeneratorApp:
             )
             return result["segments"] if "segments" in result else []
         
-    def group_words_by_punctuation(self, word_segments, max_words=10, merge_short_lines=True):
+    def group_words_by_punctuation(self, word_segments, max_words=8, merge_short_lines=True):
         """
-        Groups word segments into subtitle lines, now with a max word count.
+        Groups word segments into subtitle lines with improved logic for better readability.
+        
+        Requirements:
+        - Sentences end at . ? !
+        - Max 8-10 words per subtitle (fits on 2 lines)
+        - No 1-2 word subtitles except complete sentences
+        - Smart merging of short fragments
         """
         subtitle_lines = []
         current_line_words = []
+        
+        # Track if we're in a sentence that's too short
+        in_short_sentence = False
+        sentence_start_idx = 0
 
-        for word_data in word_segments:
+        for i, word_data in enumerate(word_segments):
             word = word_data['word'].strip()
             current_line_words.append(word_data)
 
             # Check for sentence-ending punctuation
             if word.endswith(('.', '?', '!')):
-                # Logic to create a line (same as before)
+                # We have a complete sentence
+                start_time = current_line_words[0]['start']
+                end_time = current_line_words[-1]['end']
+                text = " ".join([w['word'] for w in current_line_words])
+                
+                # Always add complete sentences, even if short
+                subtitle_lines.append({"text": text, "start": start_time, "end": end_time})
+                current_line_words = []
+                in_short_sentence = False
+                
+            # Check for commas - be more aggressive about merging
+            elif word.endswith(','):
+                # Only break on comma if we have enough words and it's not a very short fragment
+                if len(current_line_words) >= 6:  # Allow longer lines before comma breaks
+                    start_time = current_line_words[0]['start']
+                    end_time = current_line_words[-1]['end']
+                    text = " ".join([w['word'] for w in current_line_words])
+                    subtitle_lines.append({"text": text, "start": start_time, "end": end_time})
+                    current_line_words = []
+                    in_short_sentence = False
+                    
+            # Check if we're exceeding the word limit
+            elif len(current_line_words) >= max_words:
+                # Look ahead to see if we're near the end of a sentence
+                look_ahead_words = 0
+                for j in range(i + 1, min(i + 4, len(word_segments))):  # Look up to 3 words ahead
+                    if j < len(word_segments):
+                        next_word = word_segments[j]['word'].strip()
+                        if next_word.endswith(('.', '?', '!')):
+                            look_ahead_words = j - i
+                            break
+                
+                # If we're close to sentence end, wait for it
+                if look_ahead_words <= 2 and look_ahead_words > 0:
+                    pass  # Keep building to include the sentence ending
+                else:
+                    # Break here to avoid too long lines
+                    start_time = current_line_words[0]['start']
+                    end_time = current_line_words[-1]['end']
+                    text = " ".join([w['word'] for w in current_line_words])
+                    subtitle_lines.append({"text": text, "start": start_time, "end": end_time})
+                    current_line_words = []
+                    in_short_sentence = False
+
+        # Handle any remaining words
+        if current_line_words:
+            # If we have a very short remaining fragment, try to merge with the last subtitle
+            if len(current_line_words) <= 3 and subtitle_lines:
+                last_subtitle = subtitle_lines[-1]
+                # Merge if the combined length is reasonable
+                combined_words = len(last_subtitle['text'].split()) + len(current_line_words)
+                if combined_words <= max_words + 2:  # Allow slight overflow for merging
+                    # Extend the last subtitle
+                    last_subtitle['text'] = last_subtitle['text'] + ' ' + " ".join([w['word'] for w in current_line_words])
+                    last_subtitle['end'] = current_line_words[-1]['end']
+                else:
+                    # Create a new subtitle for the remaining words
+                    start_time = current_line_words[0]['start']
+                    end_time = current_line_words[-1]['end']
+                    text = " ".join([w['word'] for w in current_line_words])
+                    subtitle_lines.append({"text": text, "start": start_time, "end": end_time})
+            else:
+                # Normal case: create subtitle for remaining words
                 start_time = current_line_words[0]['start']
                 end_time = current_line_words[-1]['end']
                 text = " ".join([w['word'] for w in current_line_words])
                 subtitle_lines.append({"text": text, "start": start_time, "end": end_time})
-                current_line_words = []
-            # Check for commas on lines that aren't too short
-            elif word.endswith(','):
-                if merge_short_lines and len(current_line_words) <= 2:
-                    pass # Don't break on short comma lines
-                else:
-                    # Logic to create a line (same as before)
-                    start_time = current_line_words[0]['start']
-                    end_time = current_line_words[-1]['end']
-                    text = " ".join([w['word'] for w in current_line_words])
-                    subtitle_lines.append({"text": text, "start": start_time, "end": end_time})
-                    current_line_words = []
-            # Check if current line is very short (1-2 words) and next word ends sentence
-            elif len(current_line_words) <= 2:
-                # Look ahead to see if the next word ends the sentence
-                next_word_idx = word_segments.index(word_data) + 1
-                if next_word_idx < len(word_segments):
-                    next_word = word_segments[next_word_idx]['word'].strip()
-                    if next_word.endswith(('.', '?', '!')):
-                        # Allow exception: keep building the line to avoid single-word subtitles
-                        pass
-            # 💡 NEW: Check if the line exceeds the max word count
-            elif len(current_line_words) >= max_words:
-                # Check if the current word ends with sentence punctuation
-                if word.endswith(('.', '?', '!')):
-                    # Check if there are only 1-2 words remaining after this
-                    remaining_words = len(word_segments) - word_segments.index(word_data) - 1
-                    if remaining_words <= 2 and remaining_words > 0:
-                        # Allow exception: include the remaining words in this subtitle
-                        pass
-                    else:
-                        # Create the line as normal
-                        start_time = current_line_words[0]['start']
-                        end_time = current_line_words[-1]['end']
-                        text = " ".join([w['word'] for w in current_line_words])
-                        subtitle_lines.append({"text": text, "start": start_time, "end": end_time})
-                        current_line_words = []
-                else:
-                    # Normal case: create a line
-                    start_time = current_line_words[0]['start']
-                    end_time = current_line_words[-1]['end']
-                    text = " ".join([w['word'] for w in current_line_words])
-                    subtitle_lines.append({"text": text, "start": start_time, "end": end_time})
-                    current_line_words = []
 
+        # Post-process: merge very short subtitles with previous ones when possible
+        final_subtitles = []
+        for subtitle in subtitle_lines:
+            word_count = len(subtitle['text'].split())
+            
+            # If this subtitle is very short (1-2 words) and not a complete sentence
+            if word_count <= 2 and not subtitle['text'].strip().endswith(('.', '?', '!')):
+                # Try to merge with previous subtitle if it won't make it too long
+                if final_subtitles:
+                    prev_subtitle = final_subtitles[-1]
+                    combined_words = len(prev_subtitle['text'].split()) + word_count
+                    if combined_words <= max_words + 1:  # Allow slight overflow
+                        # Merge with previous subtitle
+                        prev_subtitle['text'] = prev_subtitle['text'] + ' ' + subtitle['text']
+                        prev_subtitle['end'] = subtitle['end']
+                        continue  # Skip adding this as a separate subtitle
+            
+            # Add the subtitle as-is
+            final_subtitles.append(subtitle)
 
-        # Handle any remaining words
-        if current_line_words:
-            start_time = current_line_words[0]['start']
-            end_time = current_line_words[-1]['end']
-            text = " ".join([w['word'] for w in current_line_words])
-            subtitle_lines.append({"text": text, "start": start_time, "end": end_time})
-
-        return subtitle_lines
+        return final_subtitles
     
     def fix_subtitle_overlaps(self, subtitles):
         """Fix any overlapping subtitles and ensure proper spacing."""
@@ -1158,9 +1210,10 @@ class AdvancedSubtitleGeneratorApp:
                         "model_size": self.model_size.get(),
                         "use_scene": use_scene_var.get(),  # Store the toggle
                         "animation_style": self.animation_style.get(),  # Store animation style
-                        "word_lead_in": self.word_lead_in.get()  # Store lead-in timing
+                        "word_lead_in": self.word_lead_in.get(),  # Store lead-in timing
+                        "max_words_per_subtitle": self.max_words_per_subtitle.get()  # Store max words setting
                     })
-                    display_str = f"Audio: {os.path.basename(audio_path)} | Script: {os.path.basename(script_path)} | Scene: {os.path.basename(scene_path) if scene_path else 'None'} | Output: {os.path.basename(output_path_with_format)} | Lang: {language} | Model: {self.model_size.get()} | Format: {video_format} (with subtitles) | Scene: {'Yes' if use_scene_var.get() else 'No'} | Animation: {self.animation_style.get()} | Lead-in: {self.word_lead_in.get()}ms"
+                    display_str = f"Audio: {os.path.basename(audio_path)} | Script: {os.path.basename(script_path)} | Scene: {os.path.basename(scene_path) if scene_path else 'None'} | Output: {os.path.basename(output_path_with_format)} | Lang: {language} | Model: {self.model_size.get()} | Format: {video_format} (with subtitles) | Scene: {'Yes' if use_scene_var.get() else 'No'} | Animation: {self.animation_style.get()} | Lead-in: {self.word_lead_in.get()}ms | Max Words: {self.max_words_per_subtitle.get()}"
                     first = False
                 else:
                     self.audio_script_pairs.append({
@@ -1174,9 +1227,10 @@ class AdvancedSubtitleGeneratorApp:
                         "model_size": self.model_size.get(),
                         "use_scene": use_scene_var.get(),  # Store the toggle
                         "animation_style": self.animation_style.get(),  # Store animation style
-                        "word_lead_in": self.word_lead_in.get()  # Store lead-in timing
+                        "word_lead_in": self.word_lead_in.get(),  # Store lead-in timing
+                        "max_words_per_subtitle": self.max_words_per_subtitle.get()  # Store max words setting
                     })
-                    display_str = f"Audio: {os.path.basename(audio_path)} | Script: {os.path.basename(script_path)} | Scene: {os.path.basename(scene_path) if scene_path else 'None'} | Output: {os.path.basename(output_path_with_format)} | Lang: {language} | Model: {self.model_size.get()} | Format: {video_format} (video only) | Scene: {'Yes' if use_scene_var.get() else 'No'} | Animation: {self.animation_style.get()} | Lead-in: {self.word_lead_in.get()}ms"
+                    display_str = f"Audio: {os.path.basename(audio_path)} | Script: {os.path.basename(script_path)} | Scene: {os.path.basename(scene_path) if scene_path else 'None'} | Output: {os.path.basename(output_path_with_format)} | Lang: {language} | Model: {self.model_size.get()} | Format: {video_format} (video only) | Scene: {'Yes' if use_scene_var.get() else 'No'} | Animation: {self.animation_style.get()} | Lead-in: {self.word_lead_in.get()}ms | Max Words: {self.max_words_per_subtitle.get()}"
                 self.pair_listbox.insert(tk.END, display_str)
             lang_window.destroy()
         tk.Button(lang_window, text="OK", command=set_lang).pack(pady=10)
@@ -1202,6 +1256,7 @@ class AdvancedSubtitleGeneratorApp:
             model_size = pair.get("model_size", "medium")  # Get model size from pair
             animation_style = pair.get("animation_style", "typewriter")  # Get animation style from pair
             word_lead_in = pair.get("word_lead_in", 100)  # Get lead-in timing from pair
+            max_words_per_subtitle = pair.get("max_words_per_subtitle", 8)  # Get max words setting from pair
             self.status_var.set(f"Processing {idx}/{total}: {os.path.basename(audio_path)}")
             self.audio_file.set(audio_path)
             self.script_file.set(script_path)
@@ -1209,13 +1264,13 @@ class AdvancedSubtitleGeneratorApp:
             self.language.set(language_code)
             # Pass srt_path_for_batch to process_single_video
             srt_path_for_batch = self.process_single_video(
-                language_code, video_format, generate_subtitles=generate_subtitles, srt_path_for_batch=srt_path_for_batch, model_size=model_size, animation_style=animation_style, word_lead_in=word_lead_in
+                language_code, video_format, generate_subtitles=generate_subtitles, srt_path_for_batch=srt_path_for_batch, model_size=model_size, animation_style=animation_style, word_lead_in=word_lead_in, max_words_per_subtitle=max_words_per_subtitle
             )
         self.status_var.set("Batch processing complete!")
         messagebox.showinfo("Batch Complete", f"Processed {total} videos.")
 
     # --- In process_single_video, use srt_path_for_batch for all subsequent videos ---
-    def process_single_video(self, language_code=None, video_format="16:9 (1920x1080)", generate_subtitles=True, srt_path_for_batch=None, model_size="medium", animation_style="typewriter", word_lead_in=100):
+    def process_single_video(self, language_code=None, video_format="16:9 (1920x1080)", generate_subtitles=True, srt_path_for_batch=None, model_size="medium", animation_style="typewriter", word_lead_in=100, max_words_per_subtitle=8):
         try:
             if not generate_subtitles:
                 # Use the stored SRT path for all subsequent videos
@@ -1294,7 +1349,7 @@ class AdvancedSubtitleGeneratorApp:
             word_segments = force_correct_phrases(word_segments, PHRASE_CORRECTIONS)
 
             # 2. Group words by punctuation
-            logical_subtitles = self.group_words_by_punctuation(word_segments)
+            logical_subtitles = self.group_words_by_punctuation(word_segments, max_words=max_words_per_subtitle)
 
             # 2.5. ✍️ NEW: Correct known names and errors
             logical_subtitles = correct_known_errors(logical_subtitles, CORRECTIONS)
