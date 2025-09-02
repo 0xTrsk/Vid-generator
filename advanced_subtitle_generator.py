@@ -1109,6 +1109,14 @@ class AdvancedSubtitleGeneratorApp:
                             if (word_seg['start'] >= sub_start and word_seg['start'] < sub_end) or \
                                (word_seg['end'] > sub_start and word_seg['end'] <= sub_end):
                                 subtitle_word_timings.append(word_seg)
+                        
+                        # Debug logging
+                        if subtitle_word_timings:
+                            print(f"✓ Main subtitle {i+1}: Found {len(subtitle_word_timings)} word timings for typewriter effect")
+                        else:
+                            print(f"⚠ Main subtitle {i+1}: No word timings found - will use fallback timing")
+                    else:
+                        print(f"⚠ Main subtitle {i+1}: No word segments available - will use fallback timing")
                     
                     typewriter_clip = create_word_typewriter_clip(
                         sub_data, size, video_format=video_format, 
@@ -1145,6 +1153,24 @@ class AdvancedSubtitleGeneratorApp:
                 for i, sub in enumerate(subtitles):
                     sub_start = sub.start.ordinal / 1000.0
                     sub_end = sub.end.ordinal / 1000.0
+                    
+                    # Calculate word timings for THIS specific subtitle
+                    subtitle_word_timings = []
+                    if hasattr(self, 'current_word_segments') and self.current_word_segments:
+                        # Find words that belong to this subtitle
+                        for word_seg in self.current_word_segments:
+                            if (word_seg['start'] >= sub_start and word_seg['start'] < sub_end) or \
+                               (word_seg['end'] > sub_start and word_seg['end'] <= sub_end):
+                                subtitle_word_timings.append(word_seg)
+                        
+                        # Debug logging
+                        if subtitle_word_timings:
+                            print(f"✓ Main subtitle {i+1}: Found {len(subtitle_word_timings)} word timings for typewriter effect")
+                        else:
+                            print(f"⚠ Main subtitle {i+1}: No word timings found - will use fallback timing")
+                    else:
+                        print(f"⚠ Main subtitle {i+1}: No word segments available - will use fallback timing")
+                    
                     # If subtitle ends before scene, skip
                     if sub_end <= 0:
                         continue
@@ -1192,7 +1218,7 @@ class AdvancedSubtitleGeneratorApp:
                         sub_data_white = {
                             'text': str(sub.text),
                             'start': white_sub_start - scene_duration,
-                            'end': white_sub_end - scene_duration
+                            'end': white_sub_end - white_sub_start
                         }
                         typewriter_clip_white = create_word_typewriter_clip(
                             sub_data_white, size, font="Arial-Bold", fontsize=70 if size[1] >= 1080 else 50, 
@@ -1880,6 +1906,7 @@ def create_word_typewriter_clip(subtitle_data, video_size, font="Arial-Bold", fo
     
     # Use actual word timings if available, otherwise fall back to equal distribution
     if word_timings and len(word_timings) == len(words):
+        print(f"✓ Using actual word timings for typewriter effect ({len(word_timings)} words)")
         # Create a mapping from word text to timing
         word_timing_map = {}
         for wt in word_timings:
@@ -2001,6 +2028,7 @@ def create_word_typewriter_clip(subtitle_data, video_size, font="Arial-Bold", fo
         final_clip = word_clips[-1].set_duration(line_duration)
         
     else:
+        print(f"⚠ Using fallback equal distribution timing (word_timings: {len(word_timings) if word_timings else 0}, words: {len(words)})")
         # Fallback to original equal distribution method
         word_clips = []
         duration_per_word = line_duration / len(words)
