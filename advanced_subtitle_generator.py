@@ -2,11 +2,46 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
 from pydub import AudioSegment
 # Explicitly set the path to FFmpeg if it's not in the system's PATH
-# Assumes FFmpeg was installed to C:\\ffmpeg as instructed.
-AudioSegment.converter = r"C:\ffmpeg\bin\ffmpeg.exe"
-AudioSegment.ffprobe = r"C:\ffmpeg\bin\ffprobe.exe"
-import pysrt
+# Check for bundled ffmpeg folder first, then local, then system PATH
 import os
+import sys
+
+def get_bundled_path():
+    """Get the path to bundled resources (for PyInstaller)"""
+    if getattr(sys, 'frozen', False):
+        # Running as compiled executable
+        return os.path.dirname(sys.executable)
+    else:
+        # Running as script
+        return os.path.dirname(os.path.abspath(__file__))
+
+base_path = get_bundled_path()
+
+# Try bundled FFmpeg first (for PyInstaller)
+bundled_ffmpeg = os.path.join(base_path, "ffmpeg", "ffmpeg.exe")
+bundled_ffprobe = os.path.join(base_path, "ffmpeg", "ffprobe.exe")
+
+# Try local ffmpeg folder second
+local_ffmpeg = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ffmpeg", "ffmpeg.exe")
+local_ffprobe = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ffmpeg", "ffprobe.exe")
+
+# Set FFmpeg paths
+if os.path.exists(bundled_ffmpeg) and os.path.exists(bundled_ffprobe):
+    # Use bundled portable FFmpeg
+    AudioSegment.converter = bundled_ffmpeg
+    AudioSegment.ffprobe = bundled_ffprobe
+    print(f"Using bundled FFmpeg: {bundled_ffmpeg}")
+elif os.path.exists(local_ffmpeg) and os.path.exists(local_ffprobe):
+    # Use local portable FFmpeg
+    AudioSegment.converter = local_ffmpeg
+    AudioSegment.ffprobe = local_ffprobe
+    print(f"Using local FFmpeg: {local_ffmpeg}")
+else:
+    # Fall back to system FFmpeg
+    AudioSegment.converter = r"C:\ffmpeg\bin\ffmpeg.exe"
+    AudioSegment.ffprobe = r"C:\ffmpeg\bin\ffprobe.exe"
+    print("Using system FFmpeg")
+import pysrt
 import threading
 import json
 from datetime import datetime, timedelta
@@ -15,10 +50,59 @@ import difflib
 import whisper
 from moviepy.editor import TextClip, CompositeVideoClip, concatenate_videoclips, ColorClip, AudioFileClip
 import moviepy.config as mpy_config
-mpy_config.change_settings({"IMAGEMAGICK_BINARY": r"C:\\ImageMagick\\magick.exe"})
 
-# Set ImageMagick binary to a path without spaces for MoviePy compatibility
-os.environ["IMAGEMAGICK_BINARY"] = r"C:\\ImageMagick\\magick.exe"  # <-- Make sure magick.exe is copied here
+# Try bundled ImageMagick first, then local, then system
+bundled_magick = os.path.join(base_path, "imagemagick", "magick.exe")
+local_magick = os.path.join(os.path.dirname(os.path.abspath(__file__)), "imagemagick", "magick.exe")
+system_magick = r"C:\ImageMagick\magick.exe"
+
+# Function to test if ImageMagick works
+def test_imagemagick(path):
+    """Test if ImageMagick at the given path works correctly"""
+    try:
+        import subprocess
+        result = subprocess.run([path, '--version'], 
+                              capture_output=True, text=True, timeout=5)
+        return result.returncode == 0
+    except:
+        return False
+
+# Set ImageMagick path with testing
+magick_path = None
+if os.path.exists(bundled_magick) and test_imagemagick(bundled_magick):
+    magick_path = bundled_magick
+    print(f"Using bundled ImageMagick: {bundled_magick}")
+elif os.path.exists(local_magick) and test_imagemagick(local_magick):
+    magick_path = local_magick
+    print(f"Using local ImageMagick: {local_magick}")
+elif os.path.exists(system_magick) and test_imagemagick(system_magick):
+    magick_path = system_magick
+    print(f"Using system ImageMagick: {system_magick}")
+else:
+    # Try to find ImageMagick in PATH as last resort
+    try:
+        import subprocess
+        result = subprocess.run(['magick', '--version'], 
+                              capture_output=True, text=True, timeout=5)
+        if result.returncode == 0:
+            # Get the full path
+            result = subprocess.run(['where', 'magick'], 
+                                  capture_output=True, text=True, timeout=5)
+            if result.returncode == 0:
+                path_candidate = result.stdout.strip().split('\n')[0]
+                if test_imagemagick(path_candidate):
+                    magick_path = path_candidate
+                    print(f"Using ImageMagick from PATH: {magick_path}")
+    except:
+        pass
+
+if magick_path:
+    mpy_config.change_settings({"IMAGEMAGICK_BINARY": magick_path})
+    os.environ["IMAGEMAGICK_BINARY"] = magick_path
+    print(f"✓ ImageMagick configured successfully")
+else:
+    print("⚠ Warning: No working ImageMagick found. Video generation may fail.")
+    print("   Please ensure ImageMagick is installed and accessible.")
 
 # Try to import WhisperX for better timestamping
 try:
@@ -31,19 +115,8 @@ except ImportError:
     print("  Install with: pip install git+https://github.com/m-bain/whisperX.git")
 
 # Configure MoviePy to find ImageMagick
-try:
-    import subprocess
-    
-    # Try to find ImageMagick in PATH
-    result = subprocess.run(['magick', '--version'], capture_output=True, text=True)
-    if result.returncode == 0:
-        # Get the full path
-        result = subprocess.run(['where', 'magick'], capture_output=True, text=True)
-        if result.returncode == 0:
-            magick_path = result.stdout.strip().split('\n')[0]
-            print(f"MoviePy configured to use ImageMagick at: {magick_path}")
-except Exception as e:
-    print(f"Could not configure MoviePy ImageMagick path: {e}")
+# Note: The bundled/local/system path is already configured above
+# This ensures we use the correct ImageMagick installation
 
 # Example correction dictionary
 # KEY (wrong text) : VALUE (correct text)
@@ -114,8 +187,11 @@ class AdvancedSubtitleGeneratorApp:
         self.setup_ui()
         
     def setup_ui(self):
+        # Restore original simple gray UI
+        self.root.configure(bg='#f0f0f0')
+
         # Main frame
-        main_frame = ttk.Frame(self.root, padding="10")
+        main_frame = ttk.Frame(self.root, padding=10)
         main_frame.grid(row=0, column=0, sticky="nsew")
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
@@ -150,7 +226,7 @@ class AdvancedSubtitleGeneratorApp:
         help_label.grid(row=5, column=0, columnspan=3, pady=(0, 20))
 
         # Preview area
-        preview_frame = ttk.LabelFrame(main_frame, text="Generated Subtitles Preview", padding="10")
+        preview_frame = ttk.LabelFrame(main_frame, text="Generated Subtitles Preview", padding=10)
         preview_frame.grid(row=6, column=0, columnspan=3, sticky="nsew", pady=(20, 0))
         preview_frame.columnconfigure(0, weight=1)
         preview_frame.rowconfigure(0, weight=1)
@@ -159,7 +235,7 @@ class AdvancedSubtitleGeneratorApp:
         main_frame.rowconfigure(6, weight=1)
         
         # Model selection
-        model_frame = ttk.LabelFrame(main_frame, text="Model Settings", padding="10")
+        model_frame = ttk.LabelFrame(main_frame, text="Model Settings", padding=10)
         model_frame.grid(row=7, column=0, columnspan=3, sticky="ew", pady=(10, 0))
         
         ttk.Label(model_frame, text="Whisper Model Size:").grid(row=0, column=0, sticky=tk.W, padx=(0, 10))
@@ -169,9 +245,35 @@ class AdvancedSubtitleGeneratorApp:
         model_combo.grid(row=0, column=1, sticky=tk.W)
         model_combo.set("medium")
         
+        # Animation style selection
+        ttk.Label(model_frame, text="Animation Style:").grid(row=1, column=0, sticky=tk.W, padx=(0, 10), pady=(10, 0))
+        self.animation_style = tk.StringVar(value="typewriter")
+        animation_combo = ttk.Combobox(model_frame, textvariable=self.animation_style,
+                                      values=list(get_animation_style_options().keys()),
+                                      state="readonly", width=20)
+        animation_combo.grid(row=1, column=1, sticky=tk.W, pady=(10, 0))
+        
         # Model info
         model_info = "tiny (39MB) < base (74MB) < small (244MB) < medium (769MB) < large (1550MB) < large-v2 (1550MB) < large-v3 (1550MB)"
-        ttk.Label(model_frame, text=model_info, foreground='gray', wraplength=600).grid(row=1, column=0, columnspan=2, sticky=tk.W, pady=(5, 0))
+        ttk.Label(model_frame, text=model_info, foreground='gray', wraplength=600).grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=(5, 0))
+        
+        # Animation style info
+        animation_info = "Choose from: typewriter, fade_in, slide_up, bounce, glitch, wave, zoom_in, typewriter_enhanced"
+        ttk.Label(model_frame, text=animation_info, foreground='gray', wraplength=600).grid(row=3, column=0, columnspan=2, sticky=tk.W, pady=(5, 0))
+        
+        # Detailed animation help
+        animation_help = """Animation Styles:
+• typewriter: Classic word-by-word appearance
+• fade_in: Smooth fade in effect
+• slide_up: Words slide up from bottom
+• bounce: Bouncy elastic entrance
+• glitch: Digital glitch effect
+• wave: Wave pattern appearance
+• zoom_in: Zoom in effect
+• typewriter_enhanced: Typewriter with blinking cursor"""
+        
+        help_label = ttk.Label(model_frame, text=animation_help, foreground='blue', wraplength=600, justify='left')
+        help_label.grid(row=4, column=0, columnspan=2, sticky="w", pady=(5, 0))
         
         # Subtitles only checkbox
         subtitles_only_cb = ttk.Checkbutton(main_frame, text="Subtitles only (do not create video)", variable=self.subtitles_only)
@@ -313,7 +415,7 @@ class AdvancedSubtitleGeneratorApp:
 
             # 4.5. Apply lead-in and lead-out for better readability
             audio_duration = self.get_audio_duration()  # Clamp subtitles to audio length
-            logical_subtitles = apply_subtitle_lead_in_out(logical_subtitles, lead_in=0.25, lead_out=0.25, audio_duration=audio_duration)
+            logical_subtitles = apply_subtitle_lead_in_out(logical_subtitles, lead_in=0.4, lead_out=0.4, audio_duration=audio_duration)
 
             # 4.6. Filter out subtitles that are empty or only punctuation
             import string
@@ -321,6 +423,21 @@ class AdvancedSubtitleGeneratorApp:
                 text = sub['text'].strip()
                 return text and any(c.isalnum() for c in text)
             logical_subtitles = [sub for sub in logical_subtitles if is_meaningful_sub(sub)]
+
+            # 4.7. Merge one-word subtitles with the previous subtitle
+            def merge_one_word_subs(subs):
+                if not subs:
+                    return subs
+                merged = [subs[0]]
+                for sub in subs[1:]:
+                    if len(sub['text'].strip().split()) == 1 and len(merged[-1]['text'].strip().split()) > 0:
+                        # Merge with previous
+                        merged[-1]['text'] = merged[-1]['text'].rstrip() + ' ' + sub['text'].lstrip()
+                        merged[-1]['end'] = sub['end']  # Extend end time
+                    else:
+                        merged.append(sub)
+                return merged
+            logical_subtitles = merge_one_word_subs(logical_subtitles)
 
             # 5. Convert to pysrt.SubRipItem objects
             subtitles = []
@@ -417,12 +534,34 @@ class AdvancedSubtitleGeneratorApp:
             if len(words) <= max_words:
                 final_lines.append(sentence)
             else:
-                # Simple and robust chunking for long sentences
-                chunks = [" ".join(words[j:j+max_words]) for j in range(0, len(words), max_words)]
-                # If the last chunk is very short, merge it with the previous
-                if len(chunks) > 1 and len(chunks[-1].split()) <= 2:
-                    chunks[-2] = chunks[-2] + " " + chunks[-1]
-                    chunks = chunks[:-1]
+                # Smart chunking for long sentences with exception for end-of-sentence words
+                chunks = []
+                i = 0
+                while i < len(words):
+                    # Check if we're near the end of the sentence
+                    remaining_words = len(words) - i
+                    
+                    # Normal chunking logic
+                    chunk_size = min(max_words, remaining_words)
+                    
+                    # Check if this chunk would end with sentence-ending punctuation
+                    end_idx = i + chunk_size
+                    if end_idx <= len(words):
+                        chunk_words = words[i:end_idx]
+                        last_chunk_word = chunk_words[-1]
+                        
+                        # If the chunk ends with sentence punctuation and we have more words after it,
+                        # check if we should include those words to avoid single-word subtitles
+                        if last_chunk_word.endswith(('.', '?', '!')):
+                            # If we have 1-2 more words after this chunk, include them
+                            if remaining_words > chunk_size and remaining_words - chunk_size <= 2:
+                                # Extend the chunk to include the remaining words
+                                chunk_size = remaining_words
+                    
+                    chunk = " ".join(words[i:i + chunk_size])
+                    chunks.append(chunk)
+                    i += chunk_size
+                
                 final_lines.extend(chunks)
         return [line for line in final_lines if line]
     
@@ -450,8 +589,6 @@ class AdvancedSubtitleGeneratorApp:
             print("Transcribing with built-in VAD and script context...")
             result = model.transcribe(
                 self.audio_file.get(),
-                initial_prompt=prompt_text,
-                vad_options={"vad_onset": 0.3, "vad_offset": 0.2},
                 language=language_code,
                 verbose=False
             )
@@ -542,14 +679,38 @@ class AdvancedSubtitleGeneratorApp:
                     text = " ".join([w['word'] for w in current_line_words])
                     subtitle_lines.append({"text": text, "start": start_time, "end": end_time})
                     current_line_words = []
+            # Check if current line is very short (1-2 words) and next word ends sentence
+            elif len(current_line_words) <= 2:
+                # Look ahead to see if the next word ends the sentence
+                next_word_idx = word_segments.index(word_data) + 1
+                if next_word_idx < len(word_segments):
+                    next_word = word_segments[next_word_idx]['word'].strip()
+                    if next_word.endswith(('.', '?', '!')):
+                        # Allow exception: keep building the line to avoid single-word subtitles
+                        pass
             # 💡 NEW: Check if the line exceeds the max word count
             elif len(current_line_words) >= max_words:
-                # Logic to create a line
-                start_time = current_line_words[0]['start']
-                end_time = current_line_words[-1]['end']
-                text = " ".join([w['word'] for w in current_line_words])
-                subtitle_lines.append({"text": text, "start": start_time, "end": end_time})
-                current_line_words = []
+                # Check if the current word ends with sentence punctuation
+                if word.endswith(('.', '?', '!')):
+                    # Check if there are only 1-2 words remaining after this
+                    remaining_words = len(word_segments) - word_segments.index(word_data) - 1
+                    if remaining_words <= 2 and remaining_words > 0:
+                        # Allow exception: include the remaining words in this subtitle
+                        pass
+                    else:
+                        # Create the line as normal
+                        start_time = current_line_words[0]['start']
+                        end_time = current_line_words[-1]['end']
+                        text = " ".join([w['word'] for w in current_line_words])
+                        subtitle_lines.append({"text": text, "start": start_time, "end": end_time})
+                        current_line_words = []
+                else:
+                    # Normal case: create a line
+                    start_time = current_line_words[0]['start']
+                    end_time = current_line_words[-1]['end']
+                    text = " ".join([w['word'] for w in current_line_words])
+                    subtitle_lines.append({"text": text, "start": start_time, "end": end_time})
+                    current_line_words = []
 
 
         # Handle any remaining words
@@ -640,34 +801,71 @@ class AdvancedSubtitleGeneratorApp:
             
         self.preview_text.insert(1.0, preview_text)
 
-    def create_video_with_subtitles(self, subtitles, show_success_message=True, video_format="16:9 (1920x1080)"):
-        """Create a simple video with a white background and black subtitle text, synchronized to the audio."""
+    def create_video_with_subtitles(self, subtitles, show_success_message=True, video_format="16:9 (1920x1080)", animation_style="typewriter"):
+        """Create a video with optional scene and typewriter subtitles, or classic fast mode if scene is not used."""
         print("=== Starting video creation process ===")
         try:
             # Check if ImageMagick is available for text rendering
             print("Checking ImageMagick availability...")
-            try:
-                # Try to create a simple text clip to test ImageMagick
-                test_text = TextClip("TEST", fontsize=20, color='black')
-                test_text.close()
-                imagemagick_available = True
-                print("✓ ImageMagick is working correctly")
-            except Exception as e:
-                if "ImageMagick" in str(e):
-                    imagemagick_available = False
-                    print("✗ ImageMagick not available")
-                    messagebox.showwarning("ImageMagick Required", 
-                        "ImageMagick is not installed, which is required for text rendering.\n\n"
-                        "To install ImageMagick:\n"
-                        "1. Download from: https://imagemagick.org/script/download.php#windows\n"
-                        "2. Install with default settings\n"
-                        "3. Restart this application\n\n"
-                        "For now, only the SRT subtitle file will be created.")
-                    return
-                else:
-                    imagemagick_available = True
-                    print(f"⚠ ImageMagick test failed with: {e}")
+            imagemagick_available = False
             
+            # First check if we have a configured ImageMagick path
+            if 'IMAGEMAGICK_BINARY' in os.environ:
+                configured_path = os.environ['IMAGEMAGICK_BINARY']
+                print(f"Testing configured ImageMagick: {configured_path}")
+                try:
+                    test_text = TextClip("TEST", fontsize=20, color='black')
+                    test_text.close()
+                    imagemagick_available = True
+                    print("✓ ImageMagick is working correctly")
+                except Exception as e:
+                    print(f"✗ Configured ImageMagick failed: {e}")
+            
+            # If configured path failed, try to find a working ImageMagick
+            if not imagemagick_available:
+                print("Trying to find working ImageMagick...")
+                possible_paths = [
+                    os.path.join(base_path, "imagemagick", "magick.exe"),
+                    os.path.join(os.path.dirname(os.path.abspath(__file__)), "imagemagick", "magick.exe"),
+                    r"C:\ImageMagick\magick.exe",
+                    r"C:\Program Files\ImageMagick-7.1.1-Q16-HDRI\magick.exe",
+                    r"C:\Program Files\ImageMagick-7.1.1-Q16\magick.exe"
+                ]
+                
+                for path in possible_paths:
+                    if os.path.exists(path):
+                        print(f"Testing ImageMagick at: {path}")
+                        try:
+                            # Temporarily set the path
+                            old_path = os.environ.get('IMAGEMAGICK_BINARY')
+                            os.environ['IMAGEMAGICK_BINARY'] = path
+                            mpy_config.change_settings({"IMAGEMAGICK_BINARY": path})
+                            
+                            test_text = TextClip("TEST", fontsize=20, color='black')
+                            test_text.close()
+                            imagemagick_available = True
+                            print(f"✓ Found working ImageMagick at: {path}")
+                            break
+                        except Exception as e:
+                            print(f"✗ Failed at {path}: {e}")
+                            # Restore old path if it existed
+                            if old_path:
+                                os.environ['IMAGEMAGICK_BINARY'] = old_path
+                                mpy_config.change_settings({"IMAGEMAGICK_BINARY": old_path})
+                            else:
+                                os.environ.pop('IMAGEMAGICK_BINARY', None)
+            
+            if not imagemagick_available:
+                print("✗ No working ImageMagick found")
+                messagebox.showwarning("ImageMagick Required", 
+                    "ImageMagick is not working properly, which is required for text rendering.\n\n"
+                    "Possible solutions:\n"
+                    "1. Ensure ImageMagick is installed correctly\n"
+                    "2. Try reinstalling ImageMagick\n"
+                    "3. Check if the bundled ImageMagick is present in the program folder\n\n"
+                    "For now, only the SRT subtitle file will be created.")
+                return
+
             audio_path = self.audio_file.get()
             if not audio_path:
                 messagebox.showerror("Error", "Audio file path is missing.")
@@ -712,7 +910,7 @@ class AdvancedSubtitleGeneratorApp:
                         'start': sub.start.ordinal / 1000.0,
                         'end': sub.end.ordinal / 1000.0
                     }
-                    typewriter_clip = create_word_typewriter_clip(sub_data, size, video_format=video_format)
+                    typewriter_clip = create_word_typewriter_clip(sub_data, size, video_format=video_format, animation_style=animation_style)
                     if typewriter_clip:
                         all_clips.append(typewriter_clip)
                 final = CompositeVideoClip(all_clips).set_audio(audio).set_duration(audio_duration)
@@ -757,7 +955,7 @@ class AdvancedSubtitleGeneratorApp:
                                 'end': scene_sub_end
                             }
                             # On scene: white bg for subtitle
-                            typewriter_clip_scene = create_word_typewriter_clip(sub_data_scene, size, font="Arial-Bold", fontsize=70 if size[1] >= 1080 else 50, color='black', bg_color='white', video_format=video_format)
+                            typewriter_clip_scene = create_word_typewriter_clip(sub_data_scene, size, font="Arial-Bold", fontsize=70 if size[1] >= 1080 else 50, color='black', bg_color='white', video_format=video_format, animation_style=animation_style)
                             if typewriter_clip_scene:
                                 subtitle_clips.append(typewriter_clip_scene.set_start(scene_sub_start))
                         # If subtitle continues onto white background
@@ -769,7 +967,7 @@ class AdvancedSubtitleGeneratorApp:
                                 'start': 0,
                                 'end': white_sub_end - white_sub_start
                             }
-                            typewriter_clip_white = create_word_typewriter_clip(sub_data_white, size, font="Arial-Bold", fontsize=70 if size[1] >= 1080 else 50, color='black', bg_color=None, video_format=video_format)
+                            typewriter_clip_white = create_word_typewriter_clip(sub_data_white, size, font="Arial-Bold", fontsize=70 if size[1] >= 1080 else 50, color='black', bg_color=None, video_format=video_format, animation_style=animation_style)
                             if typewriter_clip_white:
                                 subtitle_clips.append(typewriter_clip_white.set_start(white_sub_start))
                     else:
@@ -781,7 +979,7 @@ class AdvancedSubtitleGeneratorApp:
                             'start': white_sub_start - scene_duration,
                             'end': white_sub_end - scene_duration
                         }
-                        typewriter_clip_white = create_word_typewriter_clip(sub_data_white, size, font="Arial-Bold", fontsize=70 if size[1] >= 1080 else 50, color='black', bg_color=None, video_format=video_format)
+                        typewriter_clip_white = create_word_typewriter_clip(sub_data_white, size, font="Arial-Bold", fontsize=70 if size[1] >= 1080 else 50, color='black', bg_color=None, video_format=video_format, animation_style=animation_style)
                         if typewriter_clip_white:
                             subtitle_clips.append(typewriter_clip_white.set_start(white_sub_start))
                 # Compose scene and white background
@@ -906,9 +1104,10 @@ class AdvancedSubtitleGeneratorApp:
                         "video_format": video_format,
                         "generate_subtitles": True,
                         "model_size": self.model_size.get(),
-                        "use_scene": use_scene_var.get()  # Store the toggle
+                        "use_scene": use_scene_var.get(),  # Store the toggle
+                        "animation_style": self.animation_style.get()  # Store animation style
                     })
-                    display_str = f"Audio: {os.path.basename(audio_path)} | Script: {os.path.basename(script_path)} | Scene: {os.path.basename(scene_path) if scene_path else 'None'} | Output: {os.path.basename(output_path_with_format)} | Lang: {language} | Model: {self.model_size.get()} | Format: {video_format} (with subtitles) | Scene: {'Yes' if use_scene_var.get() else 'No'}"
+                    display_str = f"Audio: {os.path.basename(audio_path)} | Script: {os.path.basename(script_path)} | Scene: {os.path.basename(scene_path) if scene_path else 'None'} | Output: {os.path.basename(output_path_with_format)} | Lang: {language} | Model: {self.model_size.get()} | Format: {video_format} (with subtitles) | Scene: {'Yes' if use_scene_var.get() else 'No'} | Animation: {self.animation_style.get()}"
                     first = False
                 else:
                     self.audio_script_pairs.append({
@@ -920,9 +1119,10 @@ class AdvancedSubtitleGeneratorApp:
                         "video_format": video_format,
                         "generate_subtitles": False,
                         "model_size": self.model_size.get(),
-                        "use_scene": use_scene_var.get()  # Store the toggle
+                        "use_scene": use_scene_var.get(),  # Store the toggle
+                        "animation_style": self.animation_style.get()  # Store animation style
                     })
-                    display_str = f"Audio: {os.path.basename(audio_path)} | Script: {os.path.basename(script_path)} | Scene: {os.path.basename(scene_path) if scene_path else 'None'} | Output: {os.path.basename(output_path_with_format)} | Lang: {language} | Model: {self.model_size.get()} | Format: {video_format} (video only) | Scene: {'Yes' if use_scene_var.get() else 'No'}"
+                    display_str = f"Audio: {os.path.basename(audio_path)} | Script: {os.path.basename(script_path)} | Scene: {os.path.basename(scene_path) if scene_path else 'None'} | Output: {os.path.basename(output_path_with_format)} | Lang: {language} | Model: {self.model_size.get()} | Format: {video_format} (video only) | Scene: {'Yes' if use_scene_var.get() else 'No'} | Animation: {self.animation_style.get()}"
                 self.pair_listbox.insert(tk.END, display_str)
             lang_window.destroy()
         tk.Button(lang_window, text="OK", command=set_lang).pack(pady=10)
@@ -946,6 +1146,7 @@ class AdvancedSubtitleGeneratorApp:
             video_format = pair["video_format"]
             generate_subtitles = pair.get("generate_subtitles", True)
             model_size = pair.get("model_size", "medium")  # Get model size from pair
+            animation_style = pair.get("animation_style", "typewriter")  # Get animation style from pair
             self.status_var.set(f"Processing {idx}/{total}: {os.path.basename(audio_path)}")
             self.audio_file.set(audio_path)
             self.script_file.set(script_path)
@@ -953,13 +1154,13 @@ class AdvancedSubtitleGeneratorApp:
             self.language.set(language_code)
             # Pass srt_path_for_batch to process_single_video
             srt_path_for_batch = self.process_single_video(
-                language_code, video_format, generate_subtitles=generate_subtitles, srt_path_for_batch=srt_path_for_batch, model_size=model_size
+                language_code, video_format, generate_subtitles=generate_subtitles, srt_path_for_batch=srt_path_for_batch, model_size=model_size, animation_style=animation_style
             )
         self.status_var.set("Batch processing complete!")
         messagebox.showinfo("Batch Complete", f"Processed {total} videos.")
 
     # --- In process_single_video, use srt_path_for_batch for all subsequent videos ---
-    def process_single_video(self, language_code=None, video_format="16:9 (1920x1080)", generate_subtitles=True, srt_path_for_batch=None, model_size="medium"):
+    def process_single_video(self, language_code=None, video_format="16:9 (1920x1080)", generate_subtitles=True, srt_path_for_batch=None, model_size="medium", animation_style="typewriter"):
         try:
             if not generate_subtitles:
                 # Use the stored SRT path for all subsequent videos
@@ -968,7 +1169,7 @@ class AdvancedSubtitleGeneratorApp:
                 subtitles = pysrt.open(srt_path_for_batch, encoding='utf-8')
                 self.status_var.set("Creating video with subtitles...")
                 self.progress_var.set(95)
-                self.create_video_with_subtitles(subtitles, show_success_message=False, video_format=video_format)
+                self.create_video_with_subtitles(subtitles, show_success_message=False, video_format=video_format, animation_style=animation_style)
                 self.progress_var.set(100)
                 return srt_path_for_batch
             self.status_var.set("Loading script...")
@@ -1115,7 +1316,7 @@ class AdvancedSubtitleGeneratorApp:
                 self.status_var.set("Creating video with subtitles...")
                 self.progress_var.set(95)
                 # In batch mode, set show_success_message to False
-                self.create_video_with_subtitles(subtitles, show_success_message=False, video_format=video_format)
+                self.create_video_with_subtitles(subtitles, show_success_message=False, video_format=video_format, animation_style=animation_style)
             self.progress_var.set(100)
             self.status_var.set("Subtitles generated successfully!" if self.subtitles_only.get() else "Subtitles and video generated successfully!")
             self.update_preview(subtitles)
@@ -1307,50 +1508,153 @@ def wrap_text_for_format(text, video_format, max_chars_per_line=None):
     
     return "\n".join(lines)
 
-# --- Typewriter animation helper ---
-# --- Always center subtitles in create_word_typewriter_clip ---
-def create_word_typewriter_clip(subtitle_data, video_size, font="Arial-Bold", fontsize=70, color='black', bg_color='transparent', video_format="16:9 (1920x1080)"):
+# --- Typewriter animation helper with multiple styles ---
+def create_word_typewriter_clip(subtitle_data, video_size, font="Arial-Bold", fontsize=70, color='black', bg_color='transparent', video_format="16:9 (1920x1080)", animation_style="typewriter"):
+    """
+    Create subtitle clips with different animation styles.
+    
+    Animation styles:
+    - "typewriter": Word-by-word appearance (current)
+    - "fade_in": Words fade in smoothly
+    - "slide_up": Words slide up from bottom
+    - "bounce": Words bounce in with elastic effect
+    - "glitch": Words appear with glitch effect
+    - "wave": Words appear in wave pattern
+    """
     full_text = subtitle_data['text']
     line_duration = subtitle_data['end'] - subtitle_data['start']
+    
     # Defensive checks
     if not full_text or not isinstance(full_text, str) or line_duration <= 0:
         return None
+    
     # Ensure bg_color is a valid string or None
     if bg_color not in ['white', None, 'transparent']:
         bg_color = None
+    
     # Wrap text for vertical formats
     wrapped_text = wrap_text_for_format(full_text, video_format)
+    
     # Adjust font size for different formats
     if "9:16" in video_format or "1080x1920" in video_format:
         fontsize = min(fontsize, 50)  # Smaller font for vertical
     elif "4:5" in video_format or "1080x1350" in video_format:
         fontsize = min(fontsize, 60)  # Medium font for square-ish
     elif "16:9" in video_format or "1920x1080" in video_format:
-        fontsize = min(fontsize, 70)  # Standard font for horizontal, but still apply wrapping
+        fontsize = min(fontsize, 70)  # Standard font for horizontal
+    
     words = full_text.split()
     if not words:
         return None
+    
     word_clips = []
     duration_per_word = line_duration / len(words)
+    
     for i in range(len(words)):
         displayed_words = words[:i+1]
         displayed_text = wrap_text_for_format(" ".join(displayed_words), video_format)
+        
         if not displayed_text or not isinstance(displayed_text, str):
             continue
+        
         try:
+            # Create base text clip
             word_clip = TextClip(
                 displayed_text,
                 fontsize=fontsize, font=font, color=color, bg_color=bg_color,
-                method='label' # Use 'label' for tight-fitting text clips
+                method='label'  # Use 'label' for tight-fitting text clips
             ).set_duration(duration_per_word)
+            
+            # Apply animation style
+            if animation_style == "typewriter":
+                # Current style: simple word-by-word
+                pass
+                
+            elif animation_style == "fade_in":
+                # Smooth fade in effect
+                fade_duration = min(0.3, duration_per_word * 0.5)
+                word_clip = word_clip.fadein(fade_duration)
+                
+            elif animation_style == "slide_up":
+                # Slide up from bottom
+                slide_distance = 50
+                word_clip = word_clip.set_position(('center', 'center'))
+                word_clip = word_clip.set_position(lambda t: ('center', 'center' + slide_distance * (1 - min(1, t/0.3))))
+                
+            elif animation_style == "bounce":
+                # Bounce effect with elastic
+                bounce_height = 30
+                word_clip = word_clip.set_position(('center', 'center'))
+                word_clip = word_clip.set_position(lambda t: ('center', 'center' + bounce_height * (1 - min(1, t/0.4)) * (1 - min(1, t/0.4))))
+                
+            elif animation_style == "glitch":
+                # Glitch effect with random position shifts
+                import random
+                def glitch_position(t):
+                    if t < 0.1:  # First 0.1 seconds
+                        x_offset = random.randint(-5, 5)
+                        y_offset = random.randint(-3, 3)
+                        return ('center' + x_offset, 'center' + y_offset)
+                    else:
+                        return ('center', 'center')
+                word_clip = word_clip.set_position(glitch_position)
+                
+            elif animation_style == "wave":
+                # Wave pattern appearance
+                wave_amplitude = 20
+                wave_frequency = 2
+                word_clip = word_clip.set_position(('center', 'center'))
+                word_clip = word_clip.set_position(lambda t: ('center', 'center' + wave_amplitude * (1 - min(1, t/0.3)) * (1 - min(1, t/0.3)) * (1 - min(1, t/0.3))))
+                
+            elif animation_style == "zoom_in":
+                # Zoom in effect
+                scale_factor = 1.5
+                word_clip = word_clip.set_position(('center', 'center'))
+                word_clip = word_clip.resize(lambda t: scale_factor - (scale_factor - 1) * min(1, t/0.3))
+                
+            elif animation_style == "typewriter_enhanced":
+                # Enhanced typewriter with cursor effect
+                cursor_char = "|"
+                if i == len(words) - 1:  # Last word
+                    displayed_text += cursor_char
+                word_clip = TextClip(
+                    displayed_text,
+                    fontsize=fontsize, font=font, color=color, bg_color=bg_color,
+                    method='label'
+                ).set_duration(duration_per_word)
+                
             word_clips.append(word_clip)
+            
         except Exception as e:
             print(f"Warning: Could not create TextClip for text '{displayed_text}': {e}")
             continue
+    
     if not word_clips:
         return None
-    typewriter_sequence = concatenate_videoclips(word_clips)
-    return typewriter_sequence.set_position('center').set_start(subtitle_data['start'])
+    
+    # Combine all word clips
+    if animation_style in ["slide_up", "bounce", "glitch", "wave", "zoom_in"]:
+        # For these styles, we want the final clip to be visible for the full duration
+        final_clip = word_clips[-1].set_duration(line_duration)
+    else:
+        # For typewriter and fade effects, concatenate the sequence
+        final_clip = concatenate_videoclips(word_clips)
+    
+    return final_clip.set_position('center').set_start(subtitle_data['start'])
+
+# --- Animation style selector function ---
+def get_animation_style_options():
+    """Get list of available animation styles with descriptions"""
+    return {
+        "typewriter": "Classic word-by-word appearance",
+        "fade_in": "Smooth fade in effect",
+        "slide_up": "Words slide up from bottom",
+        "bounce": "Bouncy elastic entrance",
+        "glitch": "Digital glitch effect",
+        "wave": "Wave pattern appearance",
+        "zoom_in": "Zoom in effect",
+        "typewriter_enhanced": "Typewriter with blinking cursor"
+    }
 
 # NOTE: Please copy magick.exe from your ImageMagick install directory to C:\ImageMagick if not already done.
 
