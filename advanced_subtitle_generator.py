@@ -253,13 +253,20 @@ class AdvancedSubtitleGeneratorApp:
                                       state="readonly", width=20)
         animation_combo.grid(row=1, column=1, sticky=tk.W, pady=(10, 0))
         
+        # Lead-in timing control
+        ttk.Label(model_frame, text="Word Lead-in (ms):").grid(row=2, column=0, sticky=tk.W, padx=(0, 10), pady=(10, 0))
+        self.word_lead_in = tk.DoubleVar(value=100)  # 100ms default
+        lead_in_spinbox = ttk.Spinbox(model_frame, from_=0, to=500, increment=25, 
+                                      textvariable=self.word_lead_in, width=10)
+        lead_in_spinbox.grid(row=2, column=1, sticky=tk.W, pady=(10, 0))
+        
         # Model info
         model_info = "tiny (39MB) < base (74MB) < small (244MB) < medium (769MB) < large (1550MB) < large-v2 (1550MB) < large-v3 (1550MB)"
-        ttk.Label(model_frame, text=model_info, foreground='gray', wraplength=600).grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=(5, 0))
+        ttk.Label(model_frame, text=model_info, foreground='gray', wraplength=600).grid(row=3, column=0, columnspan=2, sticky=tk.W, pady=(5, 0))
         
         # Animation style info
         animation_info = "Choose from: typewriter, fade_in, slide_up, bounce, glitch, wave, zoom_in, typewriter_enhanced"
-        ttk.Label(model_frame, text=animation_info, foreground='gray', wraplength=600).grid(row=3, column=0, columnspan=2, sticky=tk.W, pady=(5, 0))
+        ttk.Label(model_frame, text=animation_info, foreground='gray', wraplength=600).grid(row=4, column=0, columnspan=2, sticky=tk.W, pady=(5, 0))
         
         # Detailed animation help
         animation_help = """Animation Styles:
@@ -273,7 +280,12 @@ class AdvancedSubtitleGeneratorApp:
 • typewriter_enhanced: Typewriter with blinking cursor"""
         
         help_label = ttk.Label(model_frame, text=animation_help, foreground='blue', wraplength=600, justify='left')
-        help_label.grid(row=4, column=0, columnspan=2, sticky="w", pady=(5, 0))
+        help_label.grid(row=5, column=0, columnspan=2, sticky="w", pady=(5, 0))
+        
+        # Timing help
+        timing_help = "Word Lead-in: How many milliseconds before each word is spoken that it appears on screen (0-500ms)"
+        timing_label = ttk.Label(model_frame, text=timing_help, foreground='green', wraplength=600, justify='left')
+        timing_label.grid(row=6, column=0, columnspan=2, sticky="w", pady=(5, 0))
         
         # Subtitles only checkbox
         subtitles_only_cb = ttk.Checkbutton(main_frame, text="Subtitles only (do not create video)", variable=self.subtitles_only)
@@ -361,6 +373,9 @@ class AdvancedSubtitleGeneratorApp:
             # --- Apply phrase-level corrections here ---
             word_segments = force_correct_phrases(segments, PHRASE_CORRECTIONS)
 
+            # Store word segments for video creation
+            self.current_word_segments = word_segments.copy()
+
             # 1. Align segments if WhisperX is used
             if WHISPERX_AVAILABLE:
                 audio_file_path = self.audio_file.get()
@@ -372,6 +387,8 @@ class AdvancedSubtitleGeneratorApp:
                     model_a, metadata = whisperx.load_align_model(language_code=lang, device="cpu")
                     aligned_result = whisperx.align(segments, model_a, metadata, audio_file_path, "cpu", return_char_alignments=False)
                     word_segments = aligned_result.get('word_segments', [])
+                    # Update stored word segments with aligned data
+                    self.current_word_segments = word_segments.copy()
                 except Exception as e:
                     print(f"WhisperX alignment failed: {e}")
                     word_segments = []
@@ -801,9 +818,13 @@ class AdvancedSubtitleGeneratorApp:
             
         self.preview_text.insert(1.0, preview_text)
 
-    def create_video_with_subtitles(self, subtitles, show_success_message=True, video_format="16:9 (1920x1080)", animation_style="typewriter"):
+    def create_video_with_subtitles(self, subtitles, show_success_message=True, video_format="16:9 (1920x1080)", animation_style="typewriter", word_lead_in=100):
         """Create a video with optional scene and typewriter subtitles, or classic fast mode if scene is not used."""
         print("=== Starting video creation process ===")
+        
+        # Set the lead-in timing for this video
+        self.current_word_lead_in = word_lead_in
+        
         try:
             # Check if ImageMagick is available for text rendering
             print("Checking ImageMagick availability...")
@@ -910,7 +931,23 @@ class AdvancedSubtitleGeneratorApp:
                         'start': sub.start.ordinal / 1000.0,
                         'end': sub.end.ordinal / 1000.0
                     }
-                    typewriter_clip = create_word_typewriter_clip(sub_data, size, video_format=video_format, animation_style=animation_style)
+                    # Find corresponding word timings for this subtitle
+                    subtitle_word_timings = []
+                    if hasattr(self, 'current_word_segments') and self.current_word_segments:
+                        # Find words that belong to this subtitle
+                        sub_start = sub_data['start']
+                        sub_end = sub_data['end']
+                        for word_seg in self.current_word_segments:
+                            if (word_seg['start'] >= sub_start and word_seg['start'] < sub_end) or \
+                               (word_seg['end'] > sub_start and word_seg['end'] <= sub_end):
+                                subtitle_word_timings.append(word_seg)
+                    
+                    typewriter_clip = create_word_typewriter_clip(
+                        sub_data, size, video_format=video_format, 
+                        animation_style=animation_style, 
+                        word_timings=subtitle_word_timings,
+                        app_instance=self
+                    )
                     if typewriter_clip:
                         all_clips.append(typewriter_clip)
                 final = CompositeVideoClip(all_clips).set_audio(audio).set_duration(audio_duration)
@@ -955,7 +992,12 @@ class AdvancedSubtitleGeneratorApp:
                                 'end': scene_sub_end
                             }
                             # On scene: white bg for subtitle
-                            typewriter_clip_scene = create_word_typewriter_clip(sub_data_scene, size, font="Arial-Bold", fontsize=70 if size[1] >= 1080 else 50, color='black', bg_color='white', video_format=video_format, animation_style=animation_style)
+                            typewriter_clip_scene = create_word_typewriter_clip(
+                                sub_data_scene, size, font="Arial-Bold", fontsize=70 if size[1] >= 1080 else 50, 
+                                color='black', bg_color='white', video_format=video_format, 
+                                animation_style=animation_style, word_timings=subtitle_word_timings,
+                                app_instance=self
+                            )
                             if typewriter_clip_scene:
                                 subtitle_clips.append(typewriter_clip_scene.set_start(scene_sub_start))
                         # If subtitle continues onto white background
@@ -967,7 +1009,12 @@ class AdvancedSubtitleGeneratorApp:
                                 'start': 0,
                                 'end': white_sub_end - white_sub_start
                             }
-                            typewriter_clip_white = create_word_typewriter_clip(sub_data_white, size, font="Arial-Bold", fontsize=70 if size[1] >= 1080 else 50, color='black', bg_color=None, video_format=video_format, animation_style=animation_style)
+                            typewriter_clip_white = create_word_typewriter_clip(
+                                sub_data_white, size, font="Arial-Bold", fontsize=70 if size[1] >= 1080 else 50, 
+                                color='black', bg_color=None, video_format=video_format, 
+                                animation_style=animation_style, word_timings=subtitle_word_timings,
+                                app_instance=self
+                            )
                             if typewriter_clip_white:
                                 subtitle_clips.append(typewriter_clip_white.set_start(white_sub_start))
                     else:
@@ -979,7 +1026,12 @@ class AdvancedSubtitleGeneratorApp:
                             'start': white_sub_start - scene_duration,
                             'end': white_sub_end - scene_duration
                         }
-                        typewriter_clip_white = create_word_typewriter_clip(sub_data_white, size, font="Arial-Bold", fontsize=70 if size[1] >= 1080 else 50, color='black', bg_color=None, video_format=video_format, animation_style=animation_style)
+                        typewriter_clip_white = create_word_typewriter_clip(
+                            sub_data_white, size, font="Arial-Bold", fontsize=70 if size[1] >= 1080 else 50, 
+                            color='black', bg_color=None, video_format=video_format, 
+                            animation_style=animation_style, word_timings=subtitle_word_timings,
+                            app_instance=self
+                        )
                         if typewriter_clip_white:
                             subtitle_clips.append(typewriter_clip_white.set_start(white_sub_start))
                 # Compose scene and white background
@@ -1105,9 +1157,10 @@ class AdvancedSubtitleGeneratorApp:
                         "generate_subtitles": True,
                         "model_size": self.model_size.get(),
                         "use_scene": use_scene_var.get(),  # Store the toggle
-                        "animation_style": self.animation_style.get()  # Store animation style
+                        "animation_style": self.animation_style.get(),  # Store animation style
+                        "word_lead_in": self.word_lead_in.get()  # Store lead-in timing
                     })
-                    display_str = f"Audio: {os.path.basename(audio_path)} | Script: {os.path.basename(script_path)} | Scene: {os.path.basename(scene_path) if scene_path else 'None'} | Output: {os.path.basename(output_path_with_format)} | Lang: {language} | Model: {self.model_size.get()} | Format: {video_format} (with subtitles) | Scene: {'Yes' if use_scene_var.get() else 'No'} | Animation: {self.animation_style.get()}"
+                    display_str = f"Audio: {os.path.basename(audio_path)} | Script: {os.path.basename(script_path)} | Scene: {os.path.basename(scene_path) if scene_path else 'None'} | Output: {os.path.basename(output_path_with_format)} | Lang: {language} | Model: {self.model_size.get()} | Format: {video_format} (with subtitles) | Scene: {'Yes' if use_scene_var.get() else 'No'} | Animation: {self.animation_style.get()} | Lead-in: {self.word_lead_in.get()}ms"
                     first = False
                 else:
                     self.audio_script_pairs.append({
@@ -1120,9 +1173,10 @@ class AdvancedSubtitleGeneratorApp:
                         "generate_subtitles": False,
                         "model_size": self.model_size.get(),
                         "use_scene": use_scene_var.get(),  # Store the toggle
-                        "animation_style": self.animation_style.get()  # Store animation style
+                        "animation_style": self.animation_style.get(),  # Store animation style
+                        "word_lead_in": self.word_lead_in.get()  # Store lead-in timing
                     })
-                    display_str = f"Audio: {os.path.basename(audio_path)} | Script: {os.path.basename(script_path)} | Scene: {os.path.basename(scene_path) if scene_path else 'None'} | Output: {os.path.basename(output_path_with_format)} | Lang: {language} | Model: {self.model_size.get()} | Format: {video_format} (video only) | Scene: {'Yes' if use_scene_var.get() else 'No'} | Animation: {self.animation_style.get()}"
+                    display_str = f"Audio: {os.path.basename(audio_path)} | Script: {os.path.basename(script_path)} | Scene: {os.path.basename(scene_path) if scene_path else 'None'} | Output: {os.path.basename(output_path_with_format)} | Lang: {language} | Model: {self.model_size.get()} | Format: {video_format} (video only) | Scene: {'Yes' if use_scene_var.get() else 'No'} | Animation: {self.animation_style.get()} | Lead-in: {self.word_lead_in.get()}ms"
                 self.pair_listbox.insert(tk.END, display_str)
             lang_window.destroy()
         tk.Button(lang_window, text="OK", command=set_lang).pack(pady=10)
@@ -1147,6 +1201,7 @@ class AdvancedSubtitleGeneratorApp:
             generate_subtitles = pair.get("generate_subtitles", True)
             model_size = pair.get("model_size", "medium")  # Get model size from pair
             animation_style = pair.get("animation_style", "typewriter")  # Get animation style from pair
+            word_lead_in = pair.get("word_lead_in", 100)  # Get lead-in timing from pair
             self.status_var.set(f"Processing {idx}/{total}: {os.path.basename(audio_path)}")
             self.audio_file.set(audio_path)
             self.script_file.set(script_path)
@@ -1154,13 +1209,13 @@ class AdvancedSubtitleGeneratorApp:
             self.language.set(language_code)
             # Pass srt_path_for_batch to process_single_video
             srt_path_for_batch = self.process_single_video(
-                language_code, video_format, generate_subtitles=generate_subtitles, srt_path_for_batch=srt_path_for_batch, model_size=model_size, animation_style=animation_style
+                language_code, video_format, generate_subtitles=generate_subtitles, srt_path_for_batch=srt_path_for_batch, model_size=model_size, animation_style=animation_style, word_lead_in=word_lead_in
             )
         self.status_var.set("Batch processing complete!")
         messagebox.showinfo("Batch Complete", f"Processed {total} videos.")
 
     # --- In process_single_video, use srt_path_for_batch for all subsequent videos ---
-    def process_single_video(self, language_code=None, video_format="16:9 (1920x1080)", generate_subtitles=True, srt_path_for_batch=None, model_size="medium", animation_style="typewriter"):
+    def process_single_video(self, language_code=None, video_format="16:9 (1920x1080)", generate_subtitles=True, srt_path_for_batch=None, model_size="medium", animation_style="typewriter", word_lead_in=100):
         try:
             if not generate_subtitles:
                 # Use the stored SRT path for all subsequent videos
@@ -1207,6 +1262,8 @@ class AdvancedSubtitleGeneratorApp:
                     model_a, metadata = whisperx.load_align_model(language_code=lang, device="cpu")
                     aligned_result = whisperx.align(segments, model_a, metadata, audio_file_path, "cpu", return_char_alignments=False)
                     word_segments = aligned_result.get('word_segments', [])
+                    # Update stored word segments with aligned data
+                    self.current_word_segments = word_segments.copy()
                 except Exception as e:
                     print(f"WhisperX alignment failed: {e}")
                     word_segments = []
@@ -1316,7 +1373,7 @@ class AdvancedSubtitleGeneratorApp:
                 self.status_var.set("Creating video with subtitles...")
                 self.progress_var.set(95)
                 # In batch mode, set show_success_message to False
-                self.create_video_with_subtitles(subtitles, show_success_message=False, video_format=video_format, animation_style=animation_style)
+                self.create_video_with_subtitles(subtitles, show_success_message=False, video_format=video_format, animation_style=animation_style, word_lead_in=word_lead_in)
             self.progress_var.set(100)
             self.status_var.set("Subtitles generated successfully!" if self.subtitles_only.get() else "Subtitles and video generated successfully!")
             self.update_preview(subtitles)
@@ -1508,18 +1565,22 @@ def wrap_text_for_format(text, video_format, max_chars_per_line=None):
     
     return "\n".join(lines)
 
-# --- Typewriter animation helper with multiple styles ---
-def create_word_typewriter_clip(subtitle_data, video_size, font="Arial-Bold", fontsize=70, color='black', bg_color='transparent', video_format="16:9 (1920x1080)", animation_style="typewriter"):
+# --- Typewriter animation helper with multiple styles and improved timing ---
+def create_word_typewriter_clip(subtitle_data, video_size, font="Arial-Bold", fontsize=70, color='black', bg_color='transparent', video_format="16:9 (1920x1080)", animation_style="typewriter", word_timings=None, app_instance=None):
     """
-    Create subtitle clips with different animation styles.
+    Create subtitle clips with different animation styles and improved word-level timing.
     
     Animation styles:
-    - "typewriter": Word-by-word appearance (current)
-    - "fade_in": Words fade in smoothly
-    - "slide_up": Words slide up from bottom
-    - "bounce": Words bounce in with elastic effect
-    - "glitch": Words appear with glitch effect
-    - "wave": Words appear in wave pattern
+    - "typewriter": Word-by-word appearance with actual timing
+    - "fade_in": Words fade in smoothly at their actual speech time
+    - "slide_up": Words slide up from bottom at their actual speech time
+    - "bounce": Words bounce in with elastic effect at their actual speech time
+    - "glitch": Words appear with glitch effect at their actual speech time
+    - "wave": Words appear in wave pattern at their actual speech time
+    - "zoom_in": Zoom in effect at actual speech time
+    - "typewriter_enhanced": Typewriter with blinking cursor and actual timing
+    
+    word_timings: List of dicts with 'word', 'start', 'end' for precise timing
     """
     full_text = subtitle_data['text']
     line_duration = subtitle_data['end'] - subtitle_data['start']
@@ -1547,98 +1608,204 @@ def create_word_typewriter_clip(subtitle_data, video_size, font="Arial-Bold", fo
     if not words:
         return None
     
-    word_clips = []
-    duration_per_word = line_duration / len(words)
-    
-    for i in range(len(words)):
-        displayed_words = words[:i+1]
-        displayed_text = wrap_text_for_format(" ".join(displayed_words), video_format)
+    # Use actual word timings if available, otherwise fall back to equal distribution
+    if word_timings and len(word_timings) == len(words):
+        # Create a mapping from word text to timing
+        word_timing_map = {}
+        for wt in word_timings:
+            if wt['word'].strip() in words:
+                word_timing_map[wt['word'].strip()] = wt
         
-        if not displayed_text or not isinstance(displayed_text, str):
-            continue
-        
-        try:
-            # Create base text clip
-            word_clip = TextClip(
-                displayed_text,
-                fontsize=fontsize, font=font, color=color, bg_color=bg_color,
-                method='label'  # Use 'label' for tight-fitting text clips
-            ).set_duration(duration_per_word)
+        # Create clips with actual timing
+        word_clips = []
+        for i, word in enumerate(words):
+            displayed_words = words[:i+1]
+            displayed_text = wrap_text_for_format(" ".join(displayed_words), video_format)
             
-            # Apply animation style
-            if animation_style == "typewriter":
-                # Current style: simple word-by-word
-                pass
+            if not displayed_text or not isinstance(displayed_text, str):
+                continue
+            
+            try:
+                # Get actual timing for this word
+                if word in word_timing_map:
+                    word_timing = word_timing_map[word]
+                    word_start = word_timing['start']
+                    word_end = word_timing['end']
+                    word_duration = word_end - word_start
+                    
+                    # Add user-configurable lead-in for better perceived sync
+                    # Get lead-in from the app instance if available
+                    lead_in = 0.1  # Default 100ms
+                    try:
+                        if hasattr(app_instance, 'word_lead_in'):
+                            lead_in = app_instance.word_lead_in.get() / 1000.0  # Convert ms to seconds
+                    except:
+                        pass
+                    
+                    adjusted_start = max(0, word_start - lead_in)
+                    adjusted_duration = word_duration + lead_in
+                else:
+                    # Fallback: equal distribution
+                    duration_per_word = line_duration / len(words)
+                    adjusted_start = subtitle_data['start'] + (i * duration_per_word)
+                    adjusted_duration = duration_per_word
                 
-            elif animation_style == "fade_in":
-                # Smooth fade in effect
-                fade_duration = min(0.3, duration_per_word * 0.5)
-                word_clip = word_clip.fadein(fade_duration)
-                
-            elif animation_style == "slide_up":
-                # Slide up from bottom
-                slide_distance = 50
-                word_clip = word_clip.set_position(('center', 'center'))
-                word_clip = word_clip.set_position(lambda t: ('center', 'center' + slide_distance * (1 - min(1, t/0.3))))
-                
-            elif animation_style == "bounce":
-                # Bounce effect with elastic
-                bounce_height = 30
-                word_clip = word_clip.set_position(('center', 'center'))
-                word_clip = word_clip.set_position(lambda t: ('center', 'center' + bounce_height * (1 - min(1, t/0.4)) * (1 - min(1, t/0.4))))
-                
-            elif animation_style == "glitch":
-                # Glitch effect with random position shifts
-                import random
-                def glitch_position(t):
-                    if t < 0.1:  # First 0.1 seconds
-                        x_offset = random.randint(-5, 5)
-                        y_offset = random.randint(-3, 3)
-                        return ('center' + x_offset, 'center' + y_offset)
-                    else:
-                        return ('center', 'center')
-                word_clip = word_clip.set_position(glitch_position)
-                
-            elif animation_style == "wave":
-                # Wave pattern appearance
-                wave_amplitude = 20
-                wave_frequency = 2
-                word_clip = word_clip.set_position(('center', 'center'))
-                word_clip = word_clip.set_position(lambda t: ('center', 'center' + wave_amplitude * (1 - min(1, t/0.3)) * (1 - min(1, t/0.3)) * (1 - min(1, t/0.3))))
-                
-            elif animation_style == "zoom_in":
-                # Zoom in effect
-                scale_factor = 1.5
-                word_clip = word_clip.set_position(('center', 'center'))
-                word_clip = word_clip.resize(lambda t: scale_factor - (scale_factor - 1) * min(1, t/0.3))
-                
-            elif animation_style == "typewriter_enhanced":
-                # Enhanced typewriter with cursor effect
-                cursor_char = "|"
-                if i == len(words) - 1:  # Last word
-                    displayed_text += cursor_char
+                # Create base text clip
                 word_clip = TextClip(
                     displayed_text,
                     fontsize=fontsize, font=font, color=color, bg_color=bg_color,
-                    method='label'
+                    method='label'  # Use 'label' for tight-fitting text clips
+                ).set_duration(adjusted_duration)
+                
+                # Apply animation style
+                if animation_style == "typewriter":
+                    # Current style: simple word-by-word with actual timing
+                    pass
+                    
+                elif animation_style == "fade_in":
+                    # Smooth fade in effect
+                    fade_duration = min(0.3, adjusted_duration * 0.5)
+                    word_clip = word_clip.fadein(fade_duration)
+                    
+                elif animation_style == "slide_up":
+                    # Slide up from bottom
+                    slide_distance = 50
+                    word_clip = word_clip.set_position(('center', 'center'))
+                    word_clip = word_clip.set_position(lambda t: ('center', 'center' + slide_distance * (1 - min(1, t/0.3))))
+                    
+                elif animation_style == "bounce":
+                    # Bounce effect with elastic
+                    bounce_height = 30
+                    word_clip = word_clip.set_position(('center', 'center'))
+                    word_clip = word_clip.set_position(lambda t: ('center', 'center' + bounce_height * (1 - min(1, t/0.4)) * (1 - min(1, t/0.4))))
+                    
+                elif animation_style == "glitch":
+                    # Glitch effect with random position shifts
+                    import random
+                    def glitch_position(t):
+                        if t < 0.1:  # First 0.1 seconds
+                            x_offset = random.randint(-5, 5)
+                            y_offset = random.randint(-3, 3)
+                            return ('center' + x_offset, 'center' + y_offset)
+                        else:
+                            return ('center', 'center')
+                    word_clip = word_clip.set_position(glitch_position)
+                    
+                elif animation_style == "wave":
+                    # Wave pattern appearance
+                    wave_amplitude = 20
+                    wave_frequency = 2
+                    word_clip = word_clip.set_position(('center', 'center'))
+                    word_clip = word_clip.set_position(lambda t: ('center', 'center' + wave_amplitude * (1 - min(1, t/0.3)) * (1 - min(1, t/0.3)) * (1 - min(1, t/0.3))))
+                    
+                elif animation_style == "zoom_in":
+                    # Zoom in effect
+                    scale_factor = 1.5
+                    word_clip = word_clip.set_position(('center', 'center'))
+                    word_clip = word_clip.resize(lambda t: scale_factor - (scale_factor - 1) * min(1, t/0.3))
+                    
+                elif animation_style == "typewriter_enhanced":
+                    # Enhanced typewriter with cursor effect
+                    cursor_char = "|"
+                    if i == len(words) - 1:  # Last word
+                        displayed_text += cursor_char
+                    word_clip = TextClip(
+                        displayed_text,
+                        fontsize=fontsize, font=font, color=color, bg_color=bg_color,
+                        method='label'
+                    ).set_duration(adjusted_duration)
+                
+                # Set the start time for this word clip
+                word_clip = word_clip.set_start(adjusted_start)
+                word_clips.append(word_clip)
+                
+            except Exception as e:
+                print(f"Warning: Could not create TextClip for text '{displayed_text}': {e}")
+                continue
+        
+        if not word_clips:
+            return None
+        
+        # For actual timing, we want to show the final text for the full duration
+        # but with individual word animations at their correct times
+        final_clip = word_clips[-1].set_duration(line_duration)
+        
+    else:
+        # Fallback to original equal distribution method
+        word_clips = []
+        duration_per_word = line_duration / len(words)
+        
+        for i in range(len(words)):
+            displayed_words = words[:i+1]
+            displayed_text = wrap_text_for_format(" ".join(displayed_words), video_format)
+            
+            if not displayed_text or not isinstance(displayed_text, str):
+                continue
+            
+            try:
+                # Create base text clip
+                word_clip = TextClip(
+                    displayed_text,
+                    fontsize=fontsize, font=font, color=color, bg_color=bg_color,
+                    method='label'  # Use 'label' for tight-fitting text clips
                 ).set_duration(duration_per_word)
                 
-            word_clips.append(word_clip)
-            
-        except Exception as e:
-            print(f"Warning: Could not create TextClip for text '{displayed_text}': {e}")
-            continue
-    
-    if not word_clips:
-        return None
-    
-    # Combine all word clips
-    if animation_style in ["slide_up", "bounce", "glitch", "wave", "zoom_in"]:
-        # For these styles, we want the final clip to be visible for the full duration
-        final_clip = word_clips[-1].set_duration(line_duration)
-    else:
-        # For typewriter and fade effects, concatenate the sequence
-        final_clip = concatenate_videoclips(word_clips)
+                # Apply animation style (same as above)
+                if animation_style == "typewriter":
+                    pass
+                elif animation_style == "fade_in":
+                    fade_duration = min(0.3, duration_per_word * 0.5)
+                    word_clip = word_clip.fadein(fade_duration)
+                elif animation_style == "slide_up":
+                    slide_distance = 50
+                    word_clip = word_clip.set_position(('center', 'center'))
+                    word_clip = word_clip.set_position(lambda t: ('center', 'center' + slide_distance * (1 - min(1, t/0.3))))
+                elif animation_style == "bounce":
+                    bounce_height = 30
+                    word_clip = word_clip.set_position(('center', 'center'))
+                    word_clip = word_clip.set_position(lambda t: ('center', 'center' + bounce_height * (1 - min(1, t/0.4)) * (1 - min(1, t/0.4))))
+                elif animation_style == "glitch":
+                    import random
+                    def glitch_position(t):
+                        if t < 0.1:
+                            x_offset = random.randint(-5, 5)
+                            y_offset = random.randint(-3, 3)
+                            return ('center' + x_offset, 'center' + y_offset)
+                        else:
+                            return ('center', 'center')
+                    word_clip = word_clip.set_position(glitch_position)
+                elif animation_style == "wave":
+                    wave_amplitude = 20
+                    word_clip = word_clip.set_position(('center', 'center'))
+                    word_clip = word_clip.set_position(lambda t: ('center', 'center' + wave_amplitude * (1 - min(1, t/0.3)) * (1 - min(1, t/0.3)) * (1 - min(1, t/0.3))))
+                elif animation_style == "zoom_in":
+                    scale_factor = 1.5
+                    word_clip = word_clip.set_position(('center', 'center'))
+                    word_clip = word_clip.resize(lambda t: scale_factor - (scale_factor - 1) * min(1, t/0.3))
+                elif animation_style == "typewriter_enhanced":
+                    cursor_char = "|"
+                    if i == len(words) - 1:
+                        displayed_text += cursor_char
+                    word_clip = TextClip(
+                        displayed_text,
+                        fontsize=fontsize, font=font, color=color, bg_color=bg_color,
+                        method='label'
+                    ).set_duration(duration_per_word)
+                
+                word_clips.append(word_clip)
+                
+            except Exception as e:
+                print(f"Warning: Could not create TextClip for text '{displayed_text}': {e}")
+                continue
+        
+        if not word_clips:
+            return None
+        
+        # Combine all word clips for equal distribution
+        if animation_style in ["slide_up", "bounce", "glitch", "wave", "zoom_in"]:
+            final_clip = word_clips[-1].set_duration(line_duration)
+        else:
+            final_clip = concatenate_videoclips(word_clips)
     
     return final_clip.set_position('center').set_start(subtitle_data['start'])
 
