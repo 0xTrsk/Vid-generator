@@ -2025,9 +2025,12 @@ def create_word_typewriter_clip(subtitle_data, video_size, font="Arial-Bold", fo
                         method='label'
                     ).set_duration(adjusted_duration)
                 
-                # Set the start time for this word clip relative to the subtitle start
-                word_clip = word_clip.set_start(adjusted_start - subtitle_data['start'])
+                # For concatenate_videoclips, we don't set start times - they're sequential
                 word_clips.append(word_clip)
+                
+                # Debug logging for first few words
+                if i < 3:
+                    print(f"    Word {i+1}: '{word}' - duration: {adjusted_duration:.2f}s")
                 
             except Exception as e:
                 print(f"Warning: Could not create TextClip for text '{displayed_text}': {e}")
@@ -2041,9 +2044,24 @@ def create_word_typewriter_clip(subtitle_data, video_size, font="Arial-Bold", fo
         if animation_style in ["slide_up", "bounce", "glitch", "wave", "zoom_in"]:
             final_clip = word_clips[-1].set_duration(line_duration)
         else:
-            # For typewriter effect, create a composite clip with all word clips
-            # Each word clip will appear at its correct time within the subtitle duration
-            final_clip = CompositeVideoClip(word_clips).set_duration(line_duration)
+            # For typewriter effect, use concatenate_videoclips but ensure proper timing
+            # We need to adjust the durations so they fit within the subtitle duration
+            print(f"    Creating concatenated clips with {len(word_clips)} word clips")
+            
+            # Calculate total duration of all word clips
+            total_word_duration = sum(clip.duration for clip in word_clips)
+            
+            if total_word_duration > line_duration:
+                # Scale down all durations to fit within subtitle duration
+                scale_factor = line_duration / total_word_duration
+                scaled_clips = []
+                for clip in word_clips:
+                    new_duration = clip.duration * scale_factor
+                    scaled_clips.append(clip.set_duration(new_duration))
+                final_clip = concatenate_videoclips(scaled_clips)
+            else:
+                # Use original clips if they fit
+                final_clip = concatenate_videoclips(word_clips)
         
     else:
         print(f"⚠ Using fallback equal distribution timing (word_timings: {len(word_timings) if word_timings else 0}, words: {len(words)})")
