@@ -2270,13 +2270,16 @@ def enhanced_correct_known_errors(subtitle_lines, corrections, script_correction
         sorted_corrections = sorted(all_corrections.items(), key=lambda x: len(x[0]), reverse=True)
         
         for wrong, correct in sorted_corrections:
-            # Use case-insensitive replacement
-            if wrong.lower() in corrected_text.lower():
-                # Preserve original case where possible
-                corrected_text = corrected_text.replace(wrong, correct)
-                corrected_text = corrected_text.replace(wrong.lower(), correct)
-                corrected_text = corrected_text.replace(wrong.title(), correct)
-                corrected_text = corrected_text.replace(wrong.upper(), correct)
+            # Use word boundary replacement to avoid partial matches
+            import re
+            
+            # Create a regex pattern that matches the word with word boundaries
+            # This prevents partial replacements like "dr" in "Bedrohung"
+            pattern = r'\b' + re.escape(wrong) + r'\b'
+            
+            # Use case-insensitive replacement with word boundaries
+            if re.search(pattern, corrected_text, re.IGNORECASE):
+                corrected_text = re.sub(pattern, correct, corrected_text, flags=re.IGNORECASE)
         
         # Update the subtitle text
         if corrected_text != original_text:
