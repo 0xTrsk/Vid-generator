@@ -852,14 +852,14 @@ class AdvancedSubtitleGeneratorApp:
                 # If we're close to sentence end, wait for it
                 if look_ahead_words <= 2 and look_ahead_words > 0:
                     pass  # Keep building to include the sentence ending
-                    else:
+                else:
                     # Break here to avoid too long lines
-                        start_time = current_line_words[0]['start']
-                        end_time = current_line_words[-1]['end']
-                        text = " ".join([w['word'] for w in current_line_words])
-                        subtitle_lines.append({"text": text, "start": start_time, "end": end_time})
-                        current_line_words = []
-                    in_short_sentence = False
+                    start_time = current_line_words[0]['start']
+                    end_time = current_line_words[-1]['end']
+                    text = " ".join([w['word'] for w in current_line_words])
+                    subtitle_lines.append({"text": text, "start": start_time, "end": end_time})
+                    current_line_words = []
+                in_short_sentence = False
 
         # Handle any remaining words
         if current_line_words:
@@ -880,10 +880,10 @@ class AdvancedSubtitleGeneratorApp:
                     subtitle_lines.append({"text": text, "start": start_time, "end": end_time})
             else:
                 # Normal case: create subtitle for remaining words
-            start_time = current_line_words[0]['start']
-            end_time = current_line_words[-1]['end']
-            text = " ".join([w['word'] for w in current_line_words])
-            subtitle_lines.append({"text": text, "start": start_time, "end": end_time})
+                start_time = current_line_words[0]['start']
+                end_time = current_line_words[-1]['end']
+                text = " ".join([w['word'] for w in current_line_words])
+                subtitle_lines.append({"text": text, "start": start_time, "end": end_time})
 
         # Post-process: merge very short subtitles with previous ones when possible
         final_subtitles = []
