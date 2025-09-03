@@ -1914,6 +1914,8 @@ def create_word_typewriter_clip(subtitle_data, video_size, font="Arial-Bold", fo
     # Allow partial word timings - if we have at least some word timings, use them
     if word_timings and len(word_timings) > 0:
         print(f"✓ Using actual word timings for typewriter effect ({len(word_timings)}/{len(words)} words)")
+        print(f"  Text: '{full_text}'")
+        print(f"  Animation style: {animation_style}")
         # Create a mapping from word text to timing
         word_timing_map = {}
         for wt in word_timings:
@@ -2033,12 +2035,17 @@ def create_word_typewriter_clip(subtitle_data, video_size, font="Arial-Bold", fo
         if not word_clips:
             return None
         
-        # For actual timing, we want to show the final text for the full duration
-        # but with individual word animations at their correct times
-        final_clip = word_clips[-1].set_duration(line_duration)
+        # For actual timing, we want to show each word appearing at its correct time
+        # Use concatenate_videoclips for proper typewriter effect
+        if animation_style in ["slide_up", "bounce", "glitch", "wave", "zoom_in"]:
+            final_clip = word_clips[-1].set_duration(line_duration)
+        else:
+            final_clip = concatenate_videoclips(word_clips)
         
     else:
         print(f"⚠ Using fallback equal distribution timing (word_timings: {len(word_timings) if word_timings else 0}, words: {len(words)})")
+        print(f"  Text: '{full_text}'")
+        print(f"  Animation style: {animation_style}")
         # Fallback to original equal distribution method
         word_clips = []
         duration_per_word = line_duration / len(words)
