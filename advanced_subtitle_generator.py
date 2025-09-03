@@ -821,6 +821,7 @@ class AdvancedSubtitleGeneratorApp:
                 start_time = current_line_words[0]['start']
                 end_time = current_line_words[-1]['end']
                 text = " ".join([w['word'] for w in current_line_words])
+                text = fix_capitalization_after_periods(text)
                 
                 # Always add complete sentences, even if short
                 subtitle_lines.append({"text": text, "start": start_time, "end": end_time})
@@ -834,6 +835,7 @@ class AdvancedSubtitleGeneratorApp:
                     start_time = current_line_words[0]['start']
                     end_time = current_line_words[-1]['end']
                     text = " ".join([w['word'] for w in current_line_words])
+                    text = fix_capitalization_after_periods(text)
                     subtitle_lines.append({"text": text, "start": start_time, "end": end_time})
                     current_line_words = []
                     in_short_sentence = False
@@ -857,6 +859,7 @@ class AdvancedSubtitleGeneratorApp:
                     start_time = current_line_words[0]['start']
                     end_time = current_line_words[-1]['end']
                     text = " ".join([w['word'] for w in current_line_words])
+                    text = fix_capitalization_after_periods(text)
                     subtitle_lines.append({"text": text, "start": start_time, "end": end_time})
                     current_line_words = []
                 in_short_sentence = False
@@ -870,19 +873,22 @@ class AdvancedSubtitleGeneratorApp:
                 combined_words = len(last_subtitle['text'].split()) + len(current_line_words)
                 if combined_words <= max_words + 2:  # Allow slight overflow for merging
                     # Extend the last subtitle
-                    last_subtitle['text'] = last_subtitle['text'] + ' ' + " ".join([w['word'] for w in current_line_words])
+                    merged_text = last_subtitle['text'] + ' ' + " ".join([w['word'] for w in current_line_words])
+                    last_subtitle['text'] = fix_capitalization_after_periods(merged_text)
                     last_subtitle['end'] = current_line_words[-1]['end']
                 else:
                     # Create a new subtitle for the remaining words
                     start_time = current_line_words[0]['start']
                     end_time = current_line_words[-1]['end']
                     text = " ".join([w['word'] for w in current_line_words])
+                    text = fix_capitalization_after_periods(text)
                     subtitle_lines.append({"text": text, "start": start_time, "end": end_time})
             else:
                 # Normal case: create subtitle for remaining words
                 start_time = current_line_words[0]['start']
                 end_time = current_line_words[-1]['end']
                 text = " ".join([w['word'] for w in current_line_words])
+                text = fix_capitalization_after_periods(text)
                 subtitle_lines.append({"text": text, "start": start_time, "end": end_time})
 
         # Post-process: merge very short subtitles with previous ones when possible
@@ -2247,6 +2253,26 @@ def create_script_based_corrections(script_text, transcription_text):
     
     return corrections
 
+def fix_capitalization_after_periods(text):
+    """
+    Fix capitalization after periods, exclamation marks, and question marks.
+    Ensures proper sentence structure in subtitles.
+    """
+    import re
+    
+    # Pattern to find periods, exclamation marks, or question marks followed by space and lowercase letter
+    pattern = r'([.!?])\s+([a-z])'
+    
+    def capitalize_after_punctuation(match):
+        punctuation = match.group(1)
+        letter = match.group(2)
+        return f"{punctuation} {letter.upper()}"
+    
+    # Apply the capitalization fix
+    corrected_text = re.sub(pattern, capitalize_after_punctuation, text)
+    
+    return corrected_text
+
 def enhanced_correct_known_errors(subtitle_lines, corrections, script_corrections=None):
     """
     Enhanced version of correct_known_errors that also applies script-based corrections.
@@ -2280,6 +2306,9 @@ def enhanced_correct_known_errors(subtitle_lines, corrections, script_correction
             # Use case-insensitive replacement with word boundaries
             if re.search(pattern, corrected_text, re.IGNORECASE):
                 corrected_text = re.sub(pattern, correct, corrected_text, flags=re.IGNORECASE)
+        
+        # Apply capitalization fixes after corrections
+        corrected_text = fix_capitalization_after_periods(corrected_text)
         
         # Update the subtitle text
         if corrected_text != original_text:
