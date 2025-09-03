@@ -632,7 +632,7 @@ class AdvancedSubtitleGeneratorApp:
             print(f"Full error details: {e}")
             import traceback
             traceback.print_exc()
-
+            
     def load_script(self):
         """Load, clean, and parse the script into appropriately sized subtitle lines."""
         with open(self.script_file.get(), 'r', encoding='utf-8') as f:
@@ -806,7 +806,7 @@ class AdvancedSubtitleGeneratorApp:
         """
         subtitle_lines = []
         current_line_words = []
-        
+
         # Track if we're in a sentence that's too short
         in_short_sentence = False
         sentence_start_idx = 0
@@ -852,13 +852,13 @@ class AdvancedSubtitleGeneratorApp:
                 # If we're close to sentence end, wait for it
                 if look_ahead_words <= 2 and look_ahead_words > 0:
                     pass  # Keep building to include the sentence ending
-                else:
+                    else:
                     # Break here to avoid too long lines
-                    start_time = current_line_words[0]['start']
-                    end_time = current_line_words[-1]['end']
-                    text = " ".join([w['word'] for w in current_line_words])
-                    subtitle_lines.append({"text": text, "start": start_time, "end": end_time})
-                    current_line_words = []
+                        start_time = current_line_words[0]['start']
+                        end_time = current_line_words[-1]['end']
+                        text = " ".join([w['word'] for w in current_line_words])
+                        subtitle_lines.append({"text": text, "start": start_time, "end": end_time})
+                        current_line_words = []
                     in_short_sentence = False
 
         # Handle any remaining words
@@ -880,10 +880,10 @@ class AdvancedSubtitleGeneratorApp:
                     subtitle_lines.append({"text": text, "start": start_time, "end": end_time})
             else:
                 # Normal case: create subtitle for remaining words
-                start_time = current_line_words[0]['start']
-                end_time = current_line_words[-1]['end']
-                text = " ".join([w['word'] for w in current_line_words])
-                subtitle_lines.append({"text": text, "start": start_time, "end": end_time})
+            start_time = current_line_words[0]['start']
+            end_time = current_line_words[-1]['end']
+            text = " ".join([w['word'] for w in current_line_words])
+            subtitle_lines.append({"text": text, "start": start_time, "end": end_time})
 
         # Post-process: merge very short subtitles with previous ones when possible
         final_subtitles = []
@@ -1110,11 +1110,14 @@ class AdvancedSubtitleGeneratorApp:
                                (word_seg['end'] > sub_start and word_seg['end'] <= sub_end):
                                 subtitle_word_timings.append(word_seg)
                         
-                        # Debug logging
+                        # Debug logging with more details
                         if subtitle_word_timings:
                             print(f"✓ Main subtitle {i+1}: Found {len(subtitle_word_timings)} word timings for typewriter effect")
+                            print(f"  Subtitle: '{sub.text}' ({sub_start:.2f}s - {sub_end:.2f}s)")
                         else:
                             print(f"⚠ Main subtitle {i+1}: No word timings found - will use fallback timing")
+                            print(f"  Subtitle: '{sub.text}' ({sub_start:.2f}s - {sub_end:.2f}s)")
+                            print(f"  Available word segments: {len(self.current_word_segments)}")
                     else:
                         print(f"⚠ Main subtitle {i+1}: No word segments available - will use fallback timing")
                     
@@ -1163,11 +1166,14 @@ class AdvancedSubtitleGeneratorApp:
                                (word_seg['end'] > sub_start and word_seg['end'] <= sub_end):
                                 subtitle_word_timings.append(word_seg)
                         
-                        # Debug logging
+                        # Debug logging with more details
                         if subtitle_word_timings:
                             print(f"✓ Main subtitle {i+1}: Found {len(subtitle_word_timings)} word timings for typewriter effect")
+                            print(f"  Subtitle: '{sub.text}' ({sub_start:.2f}s - {sub_end:.2f}s)")
                         else:
                             print(f"⚠ Main subtitle {i+1}: No word timings found - will use fallback timing")
+                            print(f"  Subtitle: '{sub.text}' ({sub_start:.2f}s - {sub_end:.2f}s)")
+                            print(f"  Available word segments: {len(self.current_word_segments)}")
                     else:
                         print(f"⚠ Main subtitle {i+1}: No word segments available - will use fallback timing")
                     
@@ -1905,13 +1911,17 @@ def create_word_typewriter_clip(subtitle_data, video_size, font="Arial-Bold", fo
         return None
     
     # Use actual word timings if available, otherwise fall back to equal distribution
-    if word_timings and len(word_timings) == len(words):
-        print(f"✓ Using actual word timings for typewriter effect ({len(word_timings)} words)")
+    # Allow partial word timings - if we have at least some word timings, use them
+    if word_timings and len(word_timings) > 0:
+        print(f"✓ Using actual word timings for typewriter effect ({len(word_timings)}/{len(words)} words)")
         # Create a mapping from word text to timing
         word_timing_map = {}
         for wt in word_timings:
-            if wt['word'].strip() in words:
-                word_timing_map[wt['word'].strip()] = wt
+            clean_word = wt['word'].strip().lower()
+            for word in words:
+                if clean_word == word.lower():
+                    word_timing_map[word] = wt
+                    break
         
         # Create clips with actual timing
         word_clips = []
@@ -2096,8 +2106,8 @@ def create_word_typewriter_clip(subtitle_data, video_size, font="Arial-Bold", fo
                 print(f"Warning: Could not create TextClip for text '{displayed_text}': {e}")
                 continue
         
-        if not word_clips:
-            return None
+    if not word_clips:
+        return None
         
         # Combine all word clips for equal distribution
         if animation_style in ["slide_up", "bounce", "glitch", "wave", "zoom_in"]:
