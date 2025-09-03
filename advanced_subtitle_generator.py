@@ -1916,6 +1916,7 @@ def create_word_typewriter_clip(subtitle_data, video_size, font="Arial-Bold", fo
         print(f"✓ Using actual word timings for typewriter effect ({len(word_timings)}/{len(words)} words)")
         print(f"  Text: '{full_text}'")
         print(f"  Animation style: {animation_style}")
+        print(f"  Subtitle duration: {line_duration:.2f}s")
         # Create a mapping from word text to timing
         word_timing_map = {}
         for wt in word_timings:
@@ -2024,8 +2025,8 @@ def create_word_typewriter_clip(subtitle_data, video_size, font="Arial-Bold", fo
                         method='label'
                     ).set_duration(adjusted_duration)
                 
-                # Set the start time for this word clip
-                word_clip = word_clip.set_start(adjusted_start)
+                # Set the start time for this word clip relative to the subtitle start
+                word_clip = word_clip.set_start(adjusted_start - subtitle_data['start'])
                 word_clips.append(word_clip)
                 
             except Exception as e:
@@ -2036,11 +2037,13 @@ def create_word_typewriter_clip(subtitle_data, video_size, font="Arial-Bold", fo
             return None
         
         # For actual timing, we want to show each word appearing at its correct time
-        # Use concatenate_videoclips for proper typewriter effect
+        # Create a composite clip that shows progressive text within the subtitle duration
         if animation_style in ["slide_up", "bounce", "glitch", "wave", "zoom_in"]:
             final_clip = word_clips[-1].set_duration(line_duration)
         else:
-            final_clip = concatenate_videoclips(word_clips)
+            # For typewriter effect, create a composite clip with all word clips
+            # Each word clip will appear at its correct time within the subtitle duration
+            final_clip = CompositeVideoClip(word_clips).set_duration(line_duration)
         
     else:
         print(f"⚠ Using fallback equal distribution timing (word_timings: {len(word_timings) if word_timings else 0}, words: {len(words)})")
